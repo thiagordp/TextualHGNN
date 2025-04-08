@@ -1,0 +1,13 @@
+Given a list of terms provided by the user, generate the most general categories or overarching terms that accurately encompass all of them.
+
+- The input terms may consist of multiple words (e.g., "supreme court").
+- Try to use few words
+- Do not use vague or broad terms.
+
+The output must be in **JSON format only**, with a single key `"terms"` and the value as a list of the resulting terms:
+
+```json
+{
+    "terms": ["term 1", "term 2", "term 3"]
+}
+```
