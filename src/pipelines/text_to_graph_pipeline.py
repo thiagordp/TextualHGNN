@@ -1,0 +1,73 @@
+import logging
+import os
+import time
+from torch_geometric.loader import DenseDataLoader
+from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
+import torch_geometric.transforms as T
+
+from src.data.utils import log_corpus_oov_statistics
+from src.utils.general_utils import format_time_elapsed
+
+# Set up logging
+# DATASET = "IMDB"
+DATASET = "Imprisonment-IT"
+# LANG = "english"
+LANG = "italian"
+
+ROOT = f"data/datasets/{DATASET}"
+log_file = f"logs/experiment_{DATASET}.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler(log_file)  # File output
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info(f"==================== START OF NEW EXPERIMENT: {DATASET} ====================")
+
+
+def main():
+    logger.info("Starting experiment...")
+    start_time = time.time()
+
+    logger.info(f"Using dataset at {ROOT}")
+
+    for split in ['train', 'validation', 'test']:
+        logger.info(f"Processing {split} split...")
+
+        start_split_time = time.time()
+        tgd = TextGraphDatasetOnDisk(
+            root=ROOT,
+            split=split,
+            batch_size=1,
+            node_feature_size=100,
+            transform=T.ToDense(num_nodes=3000),
+            max_num_nodes=1000,
+            lang=LANG
+        )
+
+        logger.info(f"Dataset Loaded - Split: {split}, Graphs: {len(tgd)}, Batch Size: {tgd.batch_size}")
+
+        # Assuming `vocabulary` is available in the TextGraphDatasetOnDisk instance
+        loader = DenseDataLoader(tgd, batch_size=32, shuffle=True)
+
+        # Calculate and log corpus-wide OOV statistics
+        logger.info(f"Calculating and logging corpus-wide OOV statistics...")
+        unk_vocab, known_vocab = tgd.text2graph_parser.text_embedding.retrieve_vocab_known_and_unk()
+        vocabulary = {**unk_vocab, **known_vocab}
+
+        logger.info(f"Number of unique words in vocabulary: {len(vocabulary)}")
+        log_corpus_oov_statistics(unk_vocab, vocabulary)
+        logger.info("UNK tokens")
+        logger.info(unk_vocab)
+
+        del loader, tgd
+        logger.info(f"Finished processing {split} split in {format_time_elapsed(start_split_time)}")
+
+    logger.info(f"Experiment completed in {format_time_elapsed(start_time)}")
+
+
+if __name__ == '__main__':
+    main()
