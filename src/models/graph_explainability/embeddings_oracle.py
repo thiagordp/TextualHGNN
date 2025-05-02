@@ -23,7 +23,7 @@ class EmbeddingOracle(BaseOracle):
     def __init__(self, model_path: str, db_path: str = "/mnt/data/embeddings.db", batch_size: int = 2000000):
         self.db_path = db_path
         self.batch_size = batch_size
-        self.model = KeyedVectors.load(model_path, mmap='r')
+        self.model = KeyedVectors.load('data/external/embeddings/itwiki_20180420_100d.bin')
         self.dimension = self.model.vector_size
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
@@ -37,11 +37,16 @@ class EmbeddingOracle(BaseOracle):
     def _create_table(self):
         self.cursor.execute("DROP INDEX IF EXISTS idx_term;")
         self.cursor.execute("""
-               CREATE TABLE IF NOT EXISTS embeddings (
-                   term TEXT PRIMARY KEY,
-                   embedding BLOB
-               )
-           """)
+                            CREATE TABLE IF NOT EXISTS embeddings
+                            (
+                                term
+                                TEXT
+                                PRIMARY
+                                KEY,
+                                embedding
+                                BLOB
+                            )
+                            """)
         self.conn.commit()
 
     def _initialize_database(self):
@@ -182,12 +187,16 @@ class EmbeddingOracle(BaseOracle):
         top_k_results = sorted(top_k_results, key=lambda x: x[1], reverse=True)[:k]
         return [term for term, _ in top_k_results]
 
-    def concept_grounding_from_embeddings(self, embeddings: torch.Tensor, num_terms_to_retrieve: int = 1,
-                                          similarity_threshold: float = 0.9999) -> Dict:
-
+    def concept_grounding_from_embeddings(
+            self,
+            embeddings: torch.Tensor,
+            num_terms_to_retrieve: int = 1,
+            similarity_threshold: float | None = 0.9999
+    ) -> Dict:
         """
         Retrieve the top-k most similar terms using GPU for fast computation.
-        This method processes embeddings in batches to avoid memory overflow.
+        - If similarity_threshold is given, returns only those above the threshold.
+        - If threshold is None, returns the top-k most similar terms without filtering.
         """
         top_k_results = []
         offset = 0
@@ -195,17 +204,6 @@ class EmbeddingOracle(BaseOracle):
         while offset <= 5 * self.batch_size:
             query = f"SELECT term, embedding FROM embeddings LIMIT {self.batch_size} OFFSET {offset}"
             results = self.cursor.execute(query).fetchall()
-
-            # Parallel deserialization
-            # def load_embedding(row):
-            #     return pickle.loads(row[1])
-            #
-            # with ThreadPoolExecutor(max_workers=10) as executor:
-            #     embeddings_list = list(executor.map(load_embedding, results))
-            #
-            # embeddings_np = np.array(embeddings_list, dtype=np.float32)
-            # existing_embeddings = torch.from_numpy(embeddings_np).to(self.device)
-            #terms = [row[0] for row in results]
 
             if not results:
                 break
@@ -215,27 +213,31 @@ class EmbeddingOracle(BaseOracle):
                 [torch.tensor(pickle.loads(row[1]), dtype=torch.float32) for row in results]
             ).to(self.device)
 
-            # Compute cosine similarities in the batch
             similarities = cosine_similarity(embeddings, existing_embeddings, dim=1).squeeze(0)
 
-            # Get top-k within this batch
             batch_top_k_indices = torch.topk(similarities, min(num_terms_to_retrieve, len(terms))).indices
             batch_top_k = [(terms[i], similarities[i].item()) for i in batch_top_k_indices]
 
-            # Merge with global top-k
+            if similarity_threshold is not None:
+                # Filter by threshold
+                batch_top_k = [(term, score) for term, score in batch_top_k if score >= similarity_threshold]
+
             top_k_results.extend(batch_top_k)
 
             offset += self.batch_size
             del existing_embeddings
             torch.cuda.empty_cache()
 
-            if any(sim >= similarity_threshold for _, sim in top_k_results):
+            if similarity_threshold is not None and len(top_k_results) >= num_terms_to_retrieve:
                 break
+
         top_k_results = sorted(top_k_results, key=lambda x: x[1], reverse=True)[:num_terms_to_retrieve]
 
-        words = [term for term, _ in top_k_results]
+        if not top_k_results:
+            return {}
+
         return {
-            "terms": words
+            "terms": [term for term, _ in top_k_results]
         }
 
     def concept_grounding_from_words(self, words: List[str], num_terms_to_retrieve: int = 1,

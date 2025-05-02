@@ -47,7 +47,6 @@ from torch_geometric.utils import from_networkx
 from tqdm import tqdm
 
 from src.data.text_graph_dataset_parsers import Text2DP, Text2GraphDataset
-from src.data.utils import plot_networkx_graph
 
 torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView])
 

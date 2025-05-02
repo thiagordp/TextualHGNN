@@ -40,7 +40,7 @@ def calculate_accuracy(predictions: np.ndarray, targets: np.ndarray) -> float:
 
 def calculate_f1_score(predictions: np.ndarray, targets: np.ndarray) -> float:
     """Calculate weighted F1 score."""
-    return f1_score(targets, predictions, average='weighted')
+    return f1_score(targets, predictions, average='weighted', zero_division=0.0)
 
 
 def calculate_confusion_matrix(predictions: np.ndarray, targets: np.ndarray) -> np.ndarray:
@@ -50,12 +50,12 @@ def calculate_confusion_matrix(predictions: np.ndarray, targets: np.ndarray) -> 
 
 def calculate_precision(predictions: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """Calculate precision score(s) for each class."""
-    return precision_score(targets, predictions, average=None)
+    return precision_score(targets, predictions, average='weighted', zero_division=0.0)
 
 
 def calculate_recall(predictions: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """Calculate recall score(s) for each class."""
-    return recall_score(targets, predictions, average=None)
+    return recall_score(targets, predictions, average='weighted', zero_division=0.0)
 
 
 def calculate_roc_auc(predictions: torch.Tensor, targets: torch.Tensor) -> list[float]:

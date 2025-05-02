@@ -1,9 +1,12 @@
 import json
+import logging
 from pathlib import Path
 
 import torch
+from matplotlib import pyplot as plt
 from torch_geometric.data import Data
 from tqdm import tqdm
+import seaborn as sns
 
 from src.models.graph_classification.gnn import DiffPool
 from src.models.graph_explainability.embeddings_oracle import EmbeddingOracle
@@ -32,6 +35,7 @@ class ConceptGrounding:
         self.raw_file_path = Path(original_raw_file_path)
         self.raw_file_content = None
         self.language = language
+
         self._init_model()
 
     def _init_model(self):
@@ -68,7 +72,7 @@ class ConceptGrounding:
 
         self.raw_file_content = open(self.raw_file_path / f"{label}/{self.data_sample_id}.txt", "r").read().strip()
 
-        print(f"Analyzing File {self.data_sample_id} | y_test {self.y_test} | y_pred {self.y_pred}")
+        logging.info(f"Analyzing File {self.data_sample_id} | y_test {self.y_test} | y_pred {self.y_pred}")
 
     def ground_concepts_at_layer_one(self, method="semantic_similarity"):
         if method not in ("semantic_similarity", "l0_similarity", "llm"):
@@ -91,8 +95,9 @@ class ConceptGrounding:
             _, top_k_indices = torch.topk(column_values, top_l0, dim=0)
             top_l0_indices_per_l1[m] = top_k_indices.tolist()
 
-        # print("Top L0 Indices per L1:")
-        # print(json.dumps(top_l0_indices_per_l1, indent=3))
+
+        # logging.info("Top L0 Indices per L1:")
+        # logging.info(json.dumps(top_l0_indices_per_l1, indent=3))
 
         # Step 3: Create a dictionary with hypernodes and corresponding nodes
         relevant_data = {}
@@ -111,8 +116,8 @@ class ConceptGrounding:
                 "nodes": nodes
             }
 
-        # print("\nRelevant Data (Structured as Dictionary):")
-        # print(json.dumps(relevant_data, indent=3))
+        # logging.info("\nRelevant Data (Structured as Dictionary):")
+        # logging.info(json.dumps(relevant_data, indent=3))
 
         return relevant_data
 
@@ -149,7 +154,7 @@ class ConceptGrounding:
 
     def concept_grounding(self):
 
-        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(top_l1=10, top_l0=5)
+        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(top_l1=self.hyper_nodes_to_explain, top_l0=self.nodes_per_hyper_node)
         nodes_l1_to_words_l0 = {'explanation': {}}
 
         for node in tqdm(nodes_l1_to_nodes_l0, desc="Grounding L1"):
@@ -161,23 +166,33 @@ class ConceptGrounding:
             # For this embeddings oracle is required.
             terms_l0 = self._get_nodes_l0(nodes_l0)
 
+            logging.info(f"Nodes from L0 under analysis: {terms_l0}")
+
             terms_cg_methods = {}
-            for cg_method in ["llm_search", "semantic_search_l0", "semantic_search_l1"]:
-                print("Starting with method " + cg_method)
+            for cg_method in ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]:
+                logging.info("Starting with method " + cg_method)
+
+                if cg_method == "top_l0":
+                    term_l0  = terms_l0[:1]
+                    terms_cg_methods["top_l0"] = term_l0
+                    logging.info(f"Terms (top_l0): {term_l0}")
+
                 if cg_method == "semantic_search_l0":
                     term_l1 = self.embedding_oracle.concept_grounding_from_words(
                         terms_l0,
                         num_terms_to_retrieve=3,
                         similarity_threshold=0.9999
                     )
+                    logging.info(f"Terms (Method L0): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
 
                 elif cg_method == "semantic_search_l1":
                     term_l1 = self.embedding_oracle.concept_grounding_from_embeddings(
                         hyper_node,
                         num_terms_to_retrieve=3,
-                        similarity_threshold=0.9
+                        similarity_threshold=None
                     )
+                    logging.info(f"Terms (Method L1): {term_l1}")
 
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
                 elif cg_method == "llm_search":
@@ -186,7 +201,7 @@ class ConceptGrounding:
                         num_terms_to_retrieve=3,
                         similarity_threshold=0.9
                     )
-
+                    logging.info(f"Terms (Method LLM): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
 
             nodes_l1_to_words_l0['explanation'][node] = {
@@ -201,7 +216,7 @@ class ConceptGrounding:
         self.explanation = nodes_l1_to_words_l0
 
     def save_explanation(self, output_file):
-        print("Storing to", output_file)
+        logging.info(f"Storing to {output_file}")
 
         with open(output_file, "w") as f:
             f.write(json.dumps(self.explanation, indent=4))

@@ -7,7 +7,7 @@ GNN models declaration
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GCNConv, DenseSAGEConv, dense_diff_pool, global_mean_pool, SAGEConv
+from torch_geometric.nn import GCNConv, DenseSAGEConv, dense_diff_pool, global_mean_pool, SAGEConv, dense_mincut_pool
 import torch.nn.functional as F
 from math import ceil
 
@@ -59,7 +59,20 @@ class GCN(GNN):
         self.conv1 = GCNConv(num_node_features, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
         self.conv3 = GCNConv(hidden_dim, num_classes)
+    def __init__(self, num_node_features, hidden_dim, num_classes, dropout=0.5):
+        super(GCN, self).__init__()
+        self.num_node_features = num_node_features
+        self.hidden_dim = hidden_dim
+        self.num_classes = num_classes
+        self.dropout = dropout
 
+        # Define graph convolution layers
+        self.conv1 = GCNConv(num_node_features, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        self.conv3 = GCNConv(hidden_dim, num_classes)
+
+        # Dropout layer for regularization
+        self.dropout_layer = nn.Dropout(dropout)
         # Dropout layer for regularization
         self.dropout_layer = nn.Dropout(dropout)
 
@@ -190,26 +203,31 @@ class DiffPool(GNN):
 
     """
 
-    def __init__(self, max_num_nodes, in_channels, hidden_channels, out_channels, decrease_proportion=0.25):
+    def __init__(self, max_num_nodes, in_channels, inner_channels, hidden_channels, out_channels, decrease_proportion=0.25, softmax_assign=False):
         super().__init__()
 
-        inner_channels = ceil(hidden_channels * 1.0)
         num_nodes = max(1, ceil(decrease_proportion * max_num_nodes))
         self.gnn1_pool = GraphSAGE(in_channels, inner_channels, num_nodes)
-        self.gnn1_embed = GraphSAGE(in_channels, inner_channels, hidden_channels, lin=False)
+        #self.gnn1_embed = GraphSAGE(in_channels, max(10, int(hidden_channels*0.1)), hidden_channels, lin=False)
 
         num_nodes = max(1, ceil(decrease_proportion * num_nodes))
-        self.gnn2_pool = GraphSAGE(3 * hidden_channels, inner_channels, num_nodes)
-        self.gnn2_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+        self.gnn2_pool = GraphSAGE(hidden_channels, inner_channels, num_nodes)
+        #self.gnn2_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
 
-        self.gnn3_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+        #self.gnn3_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
 
-        self.lin1 = torch.nn.Linear(3 * hidden_channels, hidden_channels)
+        # self.lin1 = torch.nn.Linear(hidden_channels, inner_channels*2)
+        # self.lin2 = torch.nn.Linear(inner_channels*2, out_channels)
+        self.lin1 = torch.nn.Linear(hidden_channels, hidden_channels)
         self.lin2 = torch.nn.Linear(hidden_channels, out_channels)
+        self.softmax_assign = softmax_assign
 
     def forward(self, x, adj, mask=None, debug=False):
         s = self.gnn1_pool(x, adj, mask)
-        x = self.gnn1_embed(x, adj, mask)
+        # x = self.gnn1_embed(x, adj, mask)
+
+        if self.softmax_assign:
+            s = torch.softmax(s, dim=1)
 
         if debug:
             pass
@@ -231,7 +249,9 @@ class DiffPool(GNN):
             pass
 
         s = self.gnn2_pool(x, adj)
-        x = self.gnn2_embed(x, adj)
+        if self.softmax_assign:
+            s = torch.softmax(s, dim=1)
+        # x = self.gnn2_embed(x, adj)
 
         s12 = s
 
@@ -252,10 +272,213 @@ class DiffPool(GNN):
             # print("Emb L2", emb_l2.shape)
             # print("Adj L2", adj_l2.shape)
 
+        #x = self.gnn3_embed(x, adj)
+
+        x = x.mean(dim=1)
+        x = self.lin1(x)
+        # x = self.lin1(x).relu()
+        x = self.lin2(x)
+
+        if debug:
+            return F.log_softmax(x, dim=-1), l1 + l2, e1 + e2, (emb_l1, adj_l1), (emb_l2, adj_l2), (s01, s12)
+
+        return F.log_softmax(x, dim=-1), l1 + l2, e1 + e2
+
+
+class DiffPoolSoftmax(GNN):
+    """
+    Differentiable Pooling for Graph Neural Networks.
+
+    Args:
+        max_number_nodes (int): Maximum number of nodes in the graph.
+        in_channels (int): Number of input features per node.
+        hidden_channels (int): Number of hidden features.
+        out_channels (int): Number of output features.
+        dropout (float, optional): Dropout probability for regularization. Default is 0.5.
+
+    Attributes:
+        gnn1_pool (GraphSAGE): GraphSAGE pooling layer 1.
+        gnn1_embed (GraphSAGE): GraphSAGE embedding layer 1.
+        gnn2_pool (GraphSAGE): GraphSAGE pooling layer 2.
+        gnn2_embed (GraphSAGE): GraphSAGE embedding layer 2.
+        gnn3_embed (GraphSAGE): GraphSAGE embedding layer 3.
+        lin1 (torch.nn.Linear): Linear layer 1.
+        lin2 (torch.nn.Linear): Linear layer 2.
+
+    """
+
+    def __init__(self, max_num_nodes, in_channels, hidden_channels, out_channels, decrease_proportion=0.25):
+        super().__init__()
+
+        inner_channels = max(5, ceil(hidden_channels * 0.5))
+        num_nodes = max(1, ceil(decrease_proportion * max_num_nodes))
+        self.gnn1_pool = GraphSAGE(in_channels, inner_channels, num_nodes)
+        #self.gnn1_embed = GraphSAGE(in_channels, max(10, int(hidden_channels*0.1)), hidden_channels, lin=False)
+
+        num_nodes = max(1, ceil(decrease_proportion * num_nodes))
+        self.gnn2_pool = GraphSAGE(hidden_channels, inner_channels, num_nodes)
+        #self.gnn2_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+
+        #self.gnn3_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+
+        # self.lin1 = torch.nn.Linear(hidden_channels, inner_channels*2)
+        # self.lin2 = torch.nn.Linear(inner_channels*2, out_channels)
+        self.lin1 = torch.nn.Linear(hidden_channels, hidden_channels)
+        self.lin2 = torch.nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, adj, mask=None, debug=False):
+        s = self.gnn1_pool(x, adj, mask)
+        # x = self.gnn1_embed(x, adj, mask)
+
+        if debug:
+            pass
+            # print("Output L1")
+            # print("S", s.shape)
+            # print("X", x.shape)
+
+        s = torch.softmax(x, dim=1)
+        s01 = s
+
+        x, adj, l1, e1 = dense_diff_pool(x, adj, s, mask)
+
+        emb_l1 = x
+        adj_l1 = adj
+
+        if debug:
+            # print("Diffpool L1")
+            # print("Emb L1", emb_l1.shape)
+            # print("Adj L1", adj_l1.shape)
+            pass
+
+        s = self.gnn2_pool(x, adj)
+        # x = self.gnn2_embed(x, adj)
+
+        s = torch.softmax(x, dim=1)
+        s12 = s
+
+        if debug:
+            # print("Output L2")
+            # print("S", s.shape)
+            # print("X", x.shape)
+            pass
+
+        x, adj, l2, e2 = dense_diff_pool(x, adj, s)
+
+        emb_l2 = x
+        adj_l2 = adj
+
+        if debug:
+            pass
+            # print("Diffpool L2")
+            # print("Emb L2", emb_l2.shape)
+            # print("Adj L2", adj_l2.shape)
+
+        #x = self.gnn3_embed(x, adj)
+
+        x = x.mean(dim=1)
+        x = self.lin1(x)
+        # x = self.lin1(x).relu()
+        x = self.lin2(x)
+
+        if debug:
+            return F.log_softmax(x, dim=-1), l1 + l2, e1 + e2, (emb_l1, adj_l1), (emb_l2, adj_l2), (s01, s12)
+
+        return F.log_softmax(x, dim=-1), l1 + l2, e1 + e2
+
+
+
+class DiffPoolMinCut(GNN):
+    """
+    Differentiable Pooling for Graph Neural Networks.
+
+    Args:
+        max_number_nodes (int): Maximum number of nodes in the graph.
+        in_channels (int): Number of input features per node.
+        hidden_channels (int): Number of hidden features.
+        out_channels (int): Number of output features.
+        dropout (float, optional): Dropout probability for regularization. Default is 0.5.
+
+    Attributes:
+        gnn1_pool (GraphSAGE): GraphSAGE pooling layer 1.
+        gnn1_embed (GraphSAGE): GraphSAGE embedding layer 1.
+        gnn2_pool (GraphSAGE): GraphSAGE pooling layer 2.
+        gnn2_embed (GraphSAGE): GraphSAGE embedding layer 2.
+        gnn3_embed (GraphSAGE): GraphSAGE embedding layer 3.
+        lin1 (torch.nn.Linear): Linear layer 1.
+        lin2 (torch.nn.Linear): Linear layer 2.
+
+    """
+
+    def __init__(self, max_num_nodes, in_channels, hidden_channels, out_channels, decrease_proportion=0.25):
+        super().__init__()
+
+        inner_channels = max(5, ceil(hidden_channels * 0.5))
+        num_nodes = max(1, ceil(decrease_proportion * max_num_nodes))
+        self.gnn1_pool = GraphSAGE(in_channels, inner_channels, num_nodes)
+        #self.gnn1_embed = GraphSAGE(in_channels, max(10, int(hidden_channels*0.1)), hidden_channels, lin=False)
+
+        num_nodes = max(1, ceil(decrease_proportion * num_nodes))
+        self.gnn2_pool = GraphSAGE(hidden_channels, inner_channels, num_nodes)
+        #self.gnn2_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+
+        #self.gnn3_embed = GraphSAGE(3 * hidden_channels, inner_channels, hidden_channels, lin=False)
+
+        # self.lin1 = torch.nn.Linear(hidden_channels, inner_channels*2)
+        # self.lin2 = torch.nn.Linear(inner_channels*2, out_channels)
+        self.lin1 = torch.nn.Linear(hidden_channels, hidden_channels)
+        self.lin2 = torch.nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x, adj, mask=None, debug=False):
+        s = self.gnn1_pool(x, adj, mask)
+        x = self.gnn1_embed(x, adj, mask)
+
+        if debug:
+            pass
+            # print("Output L1")
+            # print("S", s.shape)
+            # print("X", x.shape)
+
+        s01 = s
+
+        x, adj, l1, e1 = dense_mincut_pool(x, adj, s, mask)
+
+
+        emb_l1 = x
+        adj_l1 = adj
+
+        if debug:
+            # print("Diffpool L1")
+            # print("Emb L1", emb_l1.shape)
+            # print("Adj L1", adj_l1.shape)
+            pass
+
+        s = self.gnn2_pool(x, adj)
+        x = self.gnn2_embed(x, adj)
+
+        s12 = s
+
+        if debug:
+            # print("Output L2")
+            # print("S", s.shape)
+            # print("X", x.shape)
+            pass
+
+        x, adj, l2, e2 = dense_mincut_pool(x, adj, s)
+
+        emb_l2 = x
+        adj_l2 = adj
+
+        if debug:
+            pass
+            # print("Diffpool L2")
+            # print("Emb L2", emb_l2.shape)
+            # print("Adj L2", adj_l2.shape)
+
         x = self.gnn3_embed(x, adj)
 
         x = x.mean(dim=1)
-        x = self.lin1(x).relu()
+        x = self.lin1(x)
+        # x = self.lin1(x).relu()
         x = self.lin2(x)
 
         if debug:

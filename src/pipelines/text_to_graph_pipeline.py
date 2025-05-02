@@ -15,7 +15,7 @@ DATASET = "Imprisonment-IT"
 LANG = "italian"
 
 ROOT = f"data/datasets/{DATASET}"
-log_file = f"logs/experiment_{DATASET}.log"
+log_file = f"logs/experiment_text2graph_{DATASET}.log"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] - %(message)s',

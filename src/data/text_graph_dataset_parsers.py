@@ -13,7 +13,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Callable, Optional, Tuple
+from typing import List, Callable, Optional, Tuple, Any, Hashable
 
 import gensim
 import networkx as nx
@@ -24,6 +24,7 @@ import torch
 import torch_geometric
 from dotenv import load_dotenv
 from matplotlib import pyplot as plt
+from networkx import MultiDiGraph
 from sklearn.preprocessing import LabelEncoder
 from torch_geometric.data import Dataset, Data
 from torch_geometric.deprecation import deprecated
@@ -245,7 +246,7 @@ class TextEmbedding:
 
 class Text2DP(Text2Graph):
 
-    def __init__(self, lang="english"):
+    def __init__(self, lang="english", max_num_nodes=1000):
 
         self.spacy_models = {
             "italian": "it_core_news_lg",
@@ -260,6 +261,8 @@ class Text2DP(Text2Graph):
 
         self.lang = lang
         self.nlp = spacy.load(self.spacy_models[lang])
+        self.max_num_nodes = max_num_nodes
+
         self.pos_tag_to_ignore = [
             "PUNCT",  # Punctuation
             # "prep"  # Preposition # For Word Embeddings, let's keep prepositions.
@@ -267,7 +270,7 @@ class Text2DP(Text2Graph):
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Word Embeddings 
+        # Word Embeddings
         self.text_embedding = TextEmbedding(
             model_name="glove",
             file_path=self.embeddings_path[self.lang]
@@ -300,7 +303,8 @@ class Text2DP(Text2Graph):
             graph = self.parse_document(text, preprocessing_fn=preprocessing_fn)
 
             # Append the parsed graph to the list
-            graphs.append(graph)
+            if graph is not None:
+                graphs.append(graph)
 
         # Return the list of parsed graphs
         return graphs
@@ -328,8 +332,13 @@ class Text2DP(Text2Graph):
         doc = self.nlp(text)
 
         # Add both dependency parsing and sequential edges
-        self._add_dependency_edges(graph, doc)
         self._add_sequential_edges(graph, doc)
+        self._add_dependency_edges(graph, doc)
+
+        # After edges are added
+        if graph.number_of_nodes() > self.max_num_nodes:
+            logger.warning(f"Graph exceeds max nodes ({graph.number_of_nodes()} > {self.max_num_nodes}). Skipping.")
+            return None  # Or raise an error, depending on design
 
         return graph
 
@@ -349,7 +358,8 @@ class Text2DP(Text2Graph):
                     token.text.strip(),
                     token.dep_,  # Dependency label as edge
                     self.text_embedding,
-                    self.device
+                    self.device,
+                    max_num_nodes=self.max_num_nodes
                 )
 
     def _add_sequential_edges(self, graph: nx.MultiDiGraph, doc: spacy.tokens.Doc) -> None:
@@ -374,7 +384,8 @@ class Text2DP(Text2Graph):
                 next_token.text.strip(),
                 "sequence",  # Distinct label for sequential edges
                 self.text_embedding,
-                self.device
+                self.device,
+                max_num_nodes=self.max_num_nodes
             )
 
 

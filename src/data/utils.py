@@ -63,7 +63,7 @@ def retrieve_text_embeddings(text_embedding, target_text: str, device: torch.dev
 
 
 def add_new_relation_to_graph(target_graph: nx.MultiDiGraph, node_1: str, node_2: str, edge: str,
-                              text_embedding, device: torch.device | str):
+                              text_embedding, device: torch.device | str, max_num_nodes: int = 1000):
     """
     Add a new relation between two nodes in the graph, using text embeddings as node and edge features.
 
@@ -110,29 +110,34 @@ def add_new_relation_to_graph(target_graph: nx.MultiDiGraph, node_1: str, node_2
     # Check if the node and edge labels are valid.
     if check_extracted_info(node_1, node_2, edge):
 
-        # Add nodes to the graph if they don't already exist.
-        if not target_graph.has_node(node_1):
-            target_graph.add_node(node_1)
-        if not target_graph.has_node(node_2):
-            target_graph.add_node(node_2)
+        # Only add new nodes if the maximum has not been achieved yet.
+        if target_graph.number_of_nodes() + 2 <= max_num_nodes:
 
-        # Generate embeddings for the nodes and edge.
-        node_1_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-                                                     target_text=node_1,
-                                                     device=device)
-        node_2_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-                                                     target_text=node_2,
-                                                     device=device)
-        # edge_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-        #                                            target_text=edge,
-        #                                            device=device)
+            # Add nodes to the graph if they don't already exist.
+            if not target_graph.has_node(node_1):
+                target_graph.add_node(node_1)
+            if not target_graph.has_node(node_2):
+                target_graph.add_node(node_2)
 
-        # Add the nodes with their embeddings to the graph.
-        target_graph.add_node(node_1, x=node_1_embeddings)
-        target_graph.add_node(node_2, x=node_2_embeddings)
+            # Generate embeddings for the nodes and edge.
+            node_1_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
+                                                         target_text=node_1,
+                                                         device=device)
+            node_2_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
+                                                         target_text=node_2,
+                                                         device=device)
+            # edge_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
+            #                                            target_text=edge,
+            #                                            device=device)
 
-        # Add the edge with its embedding and label to the graph.
-        target_graph.add_edge(node_1, node_2, label=edge)
+            # Add the nodes with their embeddings to the graph.
+            target_graph.add_node(node_1, x=node_1_embeddings)
+            target_graph.add_node(node_2, x=node_2_embeddings)
+        else:
+            logging.warning(f"Skipping adding nodes {node_1} and {node_2} due to maximum number of nodes has been achieved ({max_num_nodes}).")
+
+        if target_graph.has_node(node_1) and target_graph.has_node(node_2):
+            target_graph.add_edge(node_1, node_2, label=edge)
 
 
 def log_corpus_oov_statistics(unk_vocab: dict, vocab: dict) -> None:
@@ -172,10 +177,8 @@ def log_corpus_oov_statistics(unk_vocab: dict, vocab: dict) -> None:
 
     # Log the data with structured formatting
     logger.info("---- UNK Stats ----")
-    logger.info(json.dumps(log_data, indent=4))
+    logger.info(f"\n{json.dumps(log_data, indent=4)}")
 
-    # Provide console feedback to indicate successful logging
-    logger.info("Metrics logged successfully!")
 
 
 def check_extracted_info(node_1: str, node_2: str, edge: str) -> bool:

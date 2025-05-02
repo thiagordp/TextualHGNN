@@ -1,0 +1,34 @@
+{
+  "italian": {
+    "EPOCHS": 100,
+    "PATIENCE": 20,
+    "LR": 0.00001,
+    "LR_DECAY": 0,
+    "NODE_FEATURE_DIM": 100,
+    "HIDDEN_DIM": 100,
+    "NUM_NODES": 1000,
+    "INNER_DIM": 64,
+    "BATCH_SIZE": 4,
+    "SOFTMAX_ASSIGN": true,
+    "DECREASE_PROPORTION": 0.02,
+    "DATASET": "Imprisonment-IT",
+    "LANG": "italian",
+    "ROOT": "data/datasets/Imprisonment-IT"
+  },
+  "english": {
+    "EPOCHS": 100,
+    "PATIENCE": 20,
+    "LR": 0.005,
+    "LR_DECAY": 0,
+    "NODE_FEATURE_DIM": 100,
+    "HIDDEN_DIM": 100,
+    "NUM_NODES": 1000,
+    "INNER_DIM": 32,
+    "BATCH_SIZE": 32,
+    "SOFTMAX_ASSIGN": true,
+    "DECREASE_PROPORTION": 0.05,
+    "DATASET": "IMDB",
+    "LANG": "english",
+    "ROOT": "data/datasets/IMDB"
+  }
+}
