@@ -1,6 +1,5 @@
 """
 Utility functions for training GNN models.
-@author Thiago Raulino Dal Pont
 @date 2024-04-12
 """
 

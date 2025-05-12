@@ -14,9 +14,7 @@ Key Features:
 5. Visualization: Supports embedding visualization using t-SNE.
 6. Early Stopping: Monitors validation performance to avoid overfitting.
 
-Author:
--------
-Thiago Raulino Dal Pont
+
 Date: 2024-04-12
 """
 
@@ -41,8 +39,8 @@ from src.utils.models_utils import get_timestamp
 # Device configuration
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-LANG = "italian"
-# LANG = "english"
+# LANG = "italian"
+LANG = "english"
 
 CONFIG = load_config(LANG, "src/utils/config.json")
 
@@ -115,11 +113,11 @@ def main():
         in_channels=tgd_train.num_node_attributes,
         out_channels=tgd_train.num_classes,
         max_num_nodes=CONFIG["NUM_NODES"],
-        lr=CONFIG["LR"],
+        lr=0.0001,
         hidden_dim=CONFIG["HIDDEN_DIM"],
-        inner_dim=CONFIG["INNER_DIM"],
-        softmax_assign=CONFIG["SOFTMAX_ASSIGN"],
-        decrease_proportion=CONFIG["DECREASE_PROPORTION"],
+        inner_dim=64,
+        softmax_assign=True,
+        decrease_proportion=0.1,
         device=DEVICE
     )
     logging.info(f"Model Init finished after {format_time_elapsed(start_time)}")
@@ -129,26 +127,27 @@ def main():
     class_weights = calculate_class_weights(tgd_train, device=DEVICE)
     loss_fn = nn.NLLLoss(weight=class_weights)
 
-    # Train and validate the model
-    best_model_path = train_and_validate(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        loss_fn=loss_fn,
-        patience=CONFIG["PATIENCE"],
-        epochs=CONFIG["EPOCHS"],
-        lr=CONFIG["LR"],
-        hidden_dim=CONFIG["HIDDEN_DIM"],
-        batch_size=CONFIG["BATCH_SIZE"],
-        use_softmax=CONFIG["SOFTMAX_ASSIGN"],
-        decrease_prop=CONFIG["DECREASE_PROPORTION"],
-        dataset_name = CONFIG["DATASET"],
-        grid_search=False,
-        verbose=False,
-        device=DEVICE,
-        timestamp=timestamp
-    )
+    # # Train and validate the model
+    # best_model_path = train_and_validate(
+    #     model=model,
+    #     train_loader=train_loader,
+    #     val_loader=val_loader,
+    #     optimizer=optimizer,
+    #     loss_fn=loss_fn,
+    #     patience=CONFIG["PATIENCE"],
+    #     epochs=CONFIG["EPOCHS"],
+    #     lr=CONFIG["LR"],
+    #     hidden_dim=CONFIG["HIDDEN_DIM"],
+    #     batch_size=CONFIG["BATCH_SIZE"],
+    #     use_softmax=CONFIG["SOFTMAX_ASSIGN"],
+    #     decrease_prop=CONFIG["DECREASE_PROPORTION"],
+    #     dataset_name = CONFIG["DATASET"],
+    #     grid_search=False,
+    #     verbose=False,
+    #     device=DEVICE,
+    #     timestamp=timestamp
+    # )
+    best_model_path = "models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
     logging.info(f"Train and Validation model finished after {format_time_elapsed(start_time)}")
 
     # Load the best model and evaluate on train, validation, and test datasets
@@ -156,8 +155,8 @@ def main():
     start_time = time.time()
     if best_model_path:
         model.load_state_dict(torch.load(best_model_path))
-        evaluate_model(model, train_loader, loss_fn, "Train", device=DEVICE)
-        evaluate_model(model, val_loader, loss_fn, "Validation", device=DEVICE)
+        #evaluate_model(model, train_loader, loss_fn, "Train", device=DEVICE)
+        #evaluate_model(model, val_loader, loss_fn, "Validation", device=DEVICE)
         evaluate_model(model, test_loader, loss_fn, "Test", device=DEVICE)
 
         logging.info(f"Best model evaluation finished after {format_time_elapsed(start_time)}")

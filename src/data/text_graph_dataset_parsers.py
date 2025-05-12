@@ -1,7 +1,6 @@
 """
 Classes for Text to Graph parsing
 
-@author Thiago Raulino Dal Pont
 @date March 26th, 2024
 """
 import json
@@ -336,7 +335,7 @@ class Text2DP(Text2Graph):
         self._add_dependency_edges(graph, doc)
 
         # After edges are added
-        if graph.number_of_nodes() > self.max_num_nodes:
+        if graph.number_of_nodes() > self.max_num_nodes*1000:
             logger.warning(f"Graph exceeds max nodes ({graph.number_of_nodes()} > {self.max_num_nodes}). Skipping.")
             return None  # Or raise an error, depending on design
 

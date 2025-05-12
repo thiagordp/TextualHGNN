@@ -169,7 +169,10 @@ class ConceptGrounding:
             logging.info(f"Nodes from L0 under analysis: {terms_l0}")
 
             terms_cg_methods = {}
-            for cg_method in ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]:
+
+            methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
+            # methods = ["top_l0", "llm_search"]
+            for cg_method in methods:
                 logging.info("Starting with method " + cg_method)
 
                 if cg_method == "top_l0":

@@ -15,7 +15,7 @@ import logging
 
 from graphviz import Digraph
 
-logger = logging.getLogger(__name__)
+
 
 
 def retrieve_bert_embeddings(embeddings_tokenizer, embeddings_model, target_text: str, device: str) -> np.array:
@@ -111,7 +111,7 @@ def add_new_relation_to_graph(target_graph: nx.MultiDiGraph, node_1: str, node_2
     if check_extracted_info(node_1, node_2, edge):
 
         # Only add new nodes if the maximum has not been achieved yet.
-        if target_graph.number_of_nodes() + 2 <= max_num_nodes:
+        if target_graph.number_of_nodes() + 2 <= max_num_nodes*1000:
 
             # Add nodes to the graph if they don't already exist.
             if not target_graph.has_node(node_1):
@@ -176,8 +176,8 @@ def log_corpus_oov_statistics(unk_vocab: dict, vocab: dict) -> None:
     }
 
     # Log the data with structured formatting
-    logger.info("---- UNK Stats ----")
-    logger.info(f"\n{json.dumps(log_data, indent=4)}")
+    logging.info("---- UNK Stats ----")
+    logging.info(f"\n{json.dumps(log_data, indent=4)}")
 
 
 
@@ -223,4 +223,4 @@ def plot_networkx_graph(
     output_filename = f"Dataset_{dataset_name}_Doc_{doc_id}"
     dot.render(filename=output_filename, directory=str(output_folder), cleanup=True, view=False)
 
-    logger.info(f"Graph saved to {output_folder}/{output_filename}.png")
+    logging.info(f"Graph saved to {output_folder}/{output_filename}.png")

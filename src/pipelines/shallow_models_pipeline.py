@@ -52,7 +52,8 @@ from sklearn.preprocessing import LabelEncoder
 import logging
 
 # Define the path to the dataset
-DATASET = "Imprisonment-IT"
+# DATASET = "Imprisonment-IT"
+DATASET="IMDB"
 dataset_path = f"data/datasets/{DATASET}"
 LANG = "english"
 
@@ -201,85 +202,85 @@ logging.info(f"Classes found by LabelEncoder: {label_encoder.classes_}")
 
 # Define models and their hyperparameters for grid search
 models = {
-    'Logistic Regression': (LogisticRegression(max_iter=1000), {
-        'C': [0.001, 0.01, 0.1, 1, 10, 100],
-        'solver': ['liblinear', 'lbfgs', 'saga', 'newton-cg'],
-        'penalty': ['l1', 'l2', 'elasticnet', 'none'],
-        'max_iter': [100, 200, 500]
-    }),
+    # 'Logistic Regression': (LogisticRegression(max_iter=1000), {
+    #     'C': [0.001, 0.01, 0.1, 1, 10, 100],
+    #     'solver': ['liblinear', 'lbfgs', 'saga', 'newton-cg'],
+    #     'penalty': ['l1', 'l2', 'elasticnet', 'none'],
+    #     'max_iter': [100, 200, 500]
+    # }),
+    #
+    # 'Support Vector Machine': (SVC(max_iter=1000), {
+    #     'C': [0.001, 0.01, 0.1, 1, 10, 100],
+    #     'kernel': ['linear', 'rbf', 'poly', 'sigmoid'],
+    #     'gamma': ['scale', 'auto'],
+    #     'degree': [2, 3, 4, 5]
+    # }),
+    #
+    # 'Random Forest': (RandomForestClassifier(), {
+    #     'n_estimators': [50, 100, 200, 500],
+    #     'max_depth': [10, 20, 30, None],
+    #     'min_samples_split': [2, 5, 10],
+    #     'min_samples_leaf': [1, 2, 4],
+    #     'bootstrap': [True, False]
+    # }),
+    #
+    # 'Gradient Boosting': (GradientBoostingClassifier(), {
+    #     'n_estimators': [50, 100, 200],
+    #     'learning_rate': [0.001, 0.01, 0.1, 0.5, 1],
+    #     'max_depth': [3, 5, 7, 10],
+    #     'min_samples_split': [2, 5, 10],
+    #     'min_samples_leaf': [1, 2, 4],
+    #     'subsample': [0.5, 0.7, 1.0]
+    # }),
+    #
+    # 'K-Nearest Neighbors': (KNeighborsClassifier(), {
+    #     'n_neighbors': [3, 5, 7, 9, 11],
+    #     'weights': ['uniform', 'distance'],
+    #     'metric': ['euclidean', 'manhattan', 'minkowski']
+    # }),
+    #
+    # 'Naive Bayes': (MultinomialNB(), {
+    #     'alpha': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
+    #     'fit_prior': [True, False]
+    # }),
+    #
+    # 'Decision Tree': (DecisionTreeClassifier(), {
+    #     'max_depth': [10, 20, 30, None],
+    #     'min_samples_split': [2, 5, 10, 20],
+    #     'min_samples_leaf': [1, 2, 4, 10],
+    #     'criterion': ['gini', 'entropy', 'log_loss']
+    # }),
 
-    'Support Vector Machine': (SVC(max_iter=1000), {
-        'C': [0.001, 0.01, 0.1, 1, 10, 100],
-        'kernel': ['linear', 'rbf', 'poly', 'sigmoid'],
-        'gamma': ['scale', 'auto'],
-        'degree': [2, 3, 4, 5]
-    }),
+    # 'AdaBoost': (AdaBoostClassifier(), {
+    #     'n_estimators': [50, 100, 200],
+    #     'learning_rate': [0.001, 0.01, 0.1, 0.5, 1]
+    # }),
 
-    'Random Forest': (RandomForestClassifier(), {
-        'n_estimators': [50, 100, 200, 500],
-        'max_depth': [10, 20, 30, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'bootstrap': [True, False]
-    }),
-
-    'Gradient Boosting': (GradientBoostingClassifier(), {
-        'n_estimators': [50, 100, 200],
-        'learning_rate': [0.001, 0.01, 0.1, 0.5, 1],
-        'max_depth': [3, 5, 7, 10],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'subsample': [0.5, 0.7, 1.0]
-    }),
-
-    'K-Nearest Neighbors': (KNeighborsClassifier(), {
-        'n_neighbors': [3, 5, 7, 9, 11],
-        'weights': ['uniform', 'distance'],
-        'metric': ['euclidean', 'manhattan', 'minkowski']
-    }),
-
-    'Naive Bayes': (MultinomialNB(), {
-        'alpha': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
-        'fit_prior': [True, False]
-    }),
-
-    'Decision Tree': (DecisionTreeClassifier(), {
-        'max_depth': [10, 20, 30, None],
-        'min_samples_split': [2, 5, 10, 20],
-        'min_samples_leaf': [1, 2, 4, 10],
-        'criterion': ['gini', 'entropy', 'log_loss']
-    }),
-
-    'AdaBoost': (AdaBoostClassifier(), {
-        'n_estimators': [50, 100, 200],
-        'learning_rate': [0.001, 0.01, 0.1, 0.5, 1]
-    }),
-
-    'Extra Trees': (ExtraTreesClassifier(), {
-        'n_estimators': [50, 100, 200, 500],
-        'max_depth': [10, 20, 30, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'bootstrap': [True, False]
-    }),
-    'Neural Network (MLPClassifier)': (MLPClassifier(), {
-        'hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
-        'activation': ['identity', 'logistic', 'tanh', 'relu'],
-        'solver': ['lbfgs', 'sgd', 'adam'],
-        'alpha': [0.0001, 0.001, 0.01],
-        'learning_rate': ['constant', 'invscaling', 'adaptive'],
-        'max_iter': [200, 500, 1000],
-        'batch_size': [32, 64, 128],
-        'early_stopping': [True, False]
-    }),
+    # 'Extra Trees': (ExtraTreesClassifier(), {
+    #     'n_estimators': [50, 100, 200, 500],
+    #     'max_depth': [10, 20, 30, None],
+    #     'min_samples_split': [2, 5, 10],
+    #     'min_samples_leaf': [1, 2, 4],
+    #     'bootstrap': [True, False]
+    # }),
+    # 'Neural Network (MLPClassifier)': (MLPClassifier(), {
+    #     'hidden_layer_sizes': [(50,), (100,), (50, 50), (100, 50)],
+    #     'activation': ['identity', 'logistic', 'tanh', 'relu'],
+    #     'solver': ['lbfgs', 'sgd', 'adam'],
+    #     'alpha': [0.0001, 0.001, 0.01],
+    #     'learning_rate': ['constant', 'invscaling', 'adaptive'],
+    #     'max_iter': [200, 500, 1000],
+    #     'batch_size': [32, 64, 128],
+    #     'early_stopping': [True, False]
+    # }),
     'XGBoost': (XGBClassifier(eval_metric='logloss'), {
         'n_estimators': [50, 100, 200],
         'learning_rate': [0.001, 0.01, 0.1, 0.5, 1],
         'max_depth': [3, 5, 7, 10],
-        'min_child_weight': [1, 3, 5],
-        'gamma': [0, 0.1, 0.2, 0.3],
-        'subsample': [0.5, 0.7, 1.0],
-        'colsample_bytree': [0.5, 0.7, 1.0]
+        # 'min_child_weight': [1, 3, 5],
+        # 'gamma': [0, 0.1, 0.2, 0.3],
+        # 'subsample': [0.5, 0.7, 1.0],
+        # 'colsample_bytree': [0.5, 0.7, 1.0]
     })
 }
 
@@ -302,7 +303,7 @@ for model_name, (model, params) in models.items():
         cv=cv,
         scoring='accuracy',
         n_jobs=-1,
-        verbose=1
+        verbose=2
     )
     grid_search.fit(X_train, y_train)
     logging.info(f"Trained model '{model_name}' in {format_time_elapsed(start_time)}")

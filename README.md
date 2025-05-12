@@ -1,4 +1,4 @@
-# TextualHGNN - Textual Hierarchical Graph Neural Networks
+# Textual Hierarchical Graph Neural Networks
 
 A modular, scalable pipeline for transforming raw textual data into graph-structured datasets using dependency and sequential parsing. Designed to support large-scale graph-based learning tasks in natural language processing (NLP) and built upon PyTorch Geometric’s `OnDiskDataset`.
 
@@ -98,17 +98,3 @@ Install dependencies via:
 pip install -r requirements.txt
 ```
 
-
-## Citation
-
-If you use this work in your research, please cite:
-
-```
-@misc{dalpont2025textgraph,
-  author = {Thiago Raulino Dal Pont},
-  title = {TextGraphDatasetOnDisk: Graph-Based Text Processing with PyG},
-  year = {2025},
-  note = {GitHub repository},
-  url = {https://github.com/your-repo-url}
-}
-```

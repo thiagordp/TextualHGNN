@@ -1,8 +1,10 @@
+import glob
 import json
 import logging
 import os
 from pathlib import Path
 
+import networkx as nx
 import torch
 from tqdm import tqdm
 
@@ -17,7 +19,6 @@ from src.utils.general_utils import plot_multidigraph_to_pdf, setup_logging, loa
 
 
 def main():
-
     # LANG = "english"
     LANG = "italian"
     CONFIG = load_config(LANG, "src/utils/config.json")
@@ -26,7 +27,7 @@ def main():
         DATASET = "IMDB"
         # MODEL_PATH = f"models/IMDB_DiffPool_20250224_234935_lr1e-05_valmacrof1score0.8500_epoch011.pth"
         # MODEL_PATH = f"models/IMDB_DiffPool_20250413_200733_lr0.0001_valmacrof1score0.8070_epoch097.pth"
-        MODEL_PATH = f"models/selected_models/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs32_softmaxTrue_decrease_prop0.05_valmacrof1score0.7984_epoch008.pth"
+        MODEL_PATH = f"models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
         EMBEDDING_PATH = "data/external/embeddings/enwiki_20180420_100d.bin"
         max_num_nodes = 1000
     else:
@@ -49,6 +50,7 @@ def main():
     DOCUMENTS_TO_EXPLAIN = 5
 
     # TODO: check the inputs below based on the loaded model.
+    # Imprisonment dims
     diffpool_model = DiffPool(
         max_num_nodes=max_num_nodes,
         in_channels=100,
@@ -58,6 +60,17 @@ def main():
         softmax_assign=True,
         decrease_proportion=0.05,
     )
+
+    # IMDB dims
+    # diffpool_model = DiffPool(
+    #     max_num_nodes=max_num_nodes,
+    #     in_channels=100,
+    #     hidden_channels=100,
+    #     out_channels=2,
+    #     inner_channels=64,
+    #     softmax_assign=True,
+    #     decrease_proportion=0.1,
+    # )
 
     diffpool_model.load_state_dict(weights)
     diffpool_model = diffpool_model.to(device=DEVICE)
@@ -87,8 +100,24 @@ def main():
         language=LANG,
         api_key=api_key,
     )
+    nx_graphs = Path(ROOT) / "test" / "interim"
+    nx_graphs = str(nx_graphs) + "/*.pt"
 
-    for doc_index in tqdm(range(DOCUMENTS_TO_EXPLAIN), desc="Explaining Documents"):
+    stored_graph_paths = glob.glob(nx_graphs)
+    stored_graph_paths = list(stored_graph_paths)
+    print(f"NX Graphs at '{nx_graphs}' with: {len(stored_graph_paths)} NX graphs.")
+
+    docs_explained = 0
+    doc_index = 0
+    while docs_explained < DOCUMENTS_TO_EXPLAIN:
+
+        doc_index += 1
+
+        logging.info(f"Explaining Document {docs_explained} out of {DOCUMENTS_TO_EXPLAIN}")
+
+        model_checkpoint_file = MODEL_PATH.split('/')[-1].replace(".pth", "")
+        output_path = f"data/explanations/{DATASET}/{model_checkpoint_file}"
+
         data_element = tgd_test[doc_index].to(device=DEVICE)
         cg = ConceptGrounding(
             graph_model=diffpool_model,
@@ -97,28 +126,36 @@ def main():
             graph=data_element,
             hyper_nodes_to_explain=5,
             nodes_per_hyper_node=5,
-            original_raw_file_path=f"{ROOT}/test/raw/" ,
+            original_raw_file_path=f"{ROOT}/test/raw/",
             language=LANG
         )
 
-        cg.concept_grounding()
+        graph = retrieve_graph(stored_graph_paths, str(cg.data_sample_id), output_path=output_path)
 
-        model_checkpoint_file = MODEL_PATH.split('/')[-1].replace(".pth","")
-        output_path = f"data/explanations/{DATASET}/{model_checkpoint_file}"
-        os.makedirs(output_path, exist_ok=True)
-        cg.save_explanation(Path(output_path) / f"{cg.data_sample_id}.json")
+        if graph is not None and graph.number_of_nodes() <= 300:
+            docs_explained += 1
 
-        nx_graphs = Path(ROOT) / "interim"
-        stored_graph_paths = nx_graphs.glob("*.pt")
-        stored_graph_paths = list(stored_graph_paths)
+            cg.concept_grounding()
 
-        # TODO: Make this more efficient.
-        for graph_data_path in tqdm(stored_graph_paths, desc="Analyzing graphs"):
-            doc_name, label, graph_nx = torch.load(graph_data_path)
+            os.makedirs(output_path, exist_ok=True)
+            cg.save_explanation(Path(output_path) / f"{cg.data_sample_id}.json")
 
-            if doc_name.find(str(cg.data_sample_id)) != -1:
-                plot_multidigraph_to_pdf(graph_nx, output_path=output_path + f"/graph_{cg.data_sample_id}.pdf")
-                break
+
+def retrieve_graph(list_of_paths_to_graphs, sample_id, output_path) -> nx.MultiDiGraph | None:
+    for graph_data_path in list_of_paths_to_graphs:
+        doc_name, label, graph_nx = torch.load(graph_data_path)
+
+        if doc_name.find(sample_id) >= 0:
+            if graph_nx.number_of_nodes() <= 300:
+                plot_multidigraph_to_pdf(
+                    graph_nx,
+                    output_path=output_path + f"/graph_{sample_id}.pdf",
+                    open_pdf=False
+                )
+                return graph_nx
+            else:
+                return None
+    return None
 
 
 if __name__ == "__main__":

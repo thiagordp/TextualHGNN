@@ -1,8 +1,6 @@
 """
 GNN models declaration
 
-@author: Thiago Raulino Dal Pont
-@date: 2024-04-12
 """
 
 import torch

@@ -214,7 +214,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
 
         os.makedirs(input_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
-
+        
         print("Graph->Dataset Parsing")
         self.process_graph2dataset(
             input_path=input_dir,

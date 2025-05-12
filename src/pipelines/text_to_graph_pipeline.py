@@ -4,7 +4,7 @@ import time
 from torch_geometric.loader import DenseDataLoader
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
 import torch_geometric.transforms as T
-
+from datetime import datetime
 from src.data.utils import log_corpus_oov_statistics
 from src.utils.general_utils import format_time_elapsed
 
@@ -15,7 +15,9 @@ DATASET = "Imprisonment-IT"
 LANG = "italian"
 
 ROOT = f"data/datasets/{DATASET}"
-log_file = f"logs/experiment_text2graph_{DATASET}.log"
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_file = f"logs/experiment_text2graph_{DATASET}_{timestamp}.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] - %(message)s',
@@ -50,9 +52,6 @@ def main():
 
         logger.info(f"Dataset Loaded - Split: {split}, Graphs: {len(tgd)}, Batch Size: {tgd.batch_size}")
 
-        # Assuming `vocabulary` is available in the TextGraphDatasetOnDisk instance
-        loader = DenseDataLoader(tgd, batch_size=32, shuffle=True)
-
         # Calculate and log corpus-wide OOV statistics
         logger.info(f"Calculating and logging corpus-wide OOV statistics...")
         unk_vocab, known_vocab = tgd.text2graph_parser.text_embedding.retrieve_vocab_known_and_unk()
@@ -62,6 +61,9 @@ def main():
         log_corpus_oov_statistics(unk_vocab, vocabulary)
         logger.info("UNK tokens")
         logger.info(unk_vocab)
+
+        # Assuming `vocabulary` is available in the TextGraphDatasetOnDisk instance
+        loader = DenseDataLoader(tgd, batch_size=32, shuffle=True)
 
         del loader, tgd
         logger.info(f"Finished processing {split} split in {format_time_elapsed(start_split_time)}")
