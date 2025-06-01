@@ -16,7 +16,7 @@
     "ROOT": "data/datasets/Imprisonment-IT"
   },
   "english": {
-    "EPOCHS": 100,
+    "EPOCHS": 10,
     "PATIENCE": 20,
     "LR": 0.005,
     "LR_DECAY": 0,

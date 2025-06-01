@@ -2,18 +2,22 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from typing import Tuple
 
 import torch
 import torch_geometric.transforms as T
+from matplotlib import pyplot as plt
 from sklearn.metrics import classification_report, f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.loader import DenseDataLoader
 from tqdm import tqdm
 
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
 from src.models.graph_classification.gnn import DiffPool
+from src.models.graph_explainability.cg_evaluation_metrics import ConceptCompletenessCalculatorV2
 from src.utils.models_utils import get_timestamp
 
 
@@ -159,7 +163,7 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
     # logging.info(summary(model))
     logging.info(model)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     logging.info(f"Model Initialized with {model.num_parameters} parameters.")
 
     return model, optimizer
@@ -198,30 +202,63 @@ def train(model, loader, optimizer, loss_fn, device,
     correct_predictions = 0
     total_samples = 0
 
-    for data in tqdm(loader, desc="Processing Training Batches"):
-        data = data.to(device)
+    batch = 0
 
+    window_size = 10
+    rolling_cls_loss = deque(maxlen=window_size)
+    rolling_link_loss = deque(maxlen=window_size)
+    rolling_entropy = deque(maxlen=window_size)
+
+    # ✅ Create tqdm instance as a variable
+    pbar = tqdm(loader, desc="Processing Training Batches")
+
+    cls_loss_timeline = []
+    link_loss_timeline = []
+    entropy_loss_timeline = []
+
+    scaler = GradScaler()
+
+    for data in pbar:  # iterate over pbar, not tqdm(loader)
+        batch += 1
+        data = data.to(device)
         optimizer.zero_grad()
 
-        # Forward pass
-        output, l, e = model(data.x, data.adj, data.mask)
+        with autocast():  # AMP context
+            output, l, e = model(data.x, data.adj, data.mask)
+            y = torch.sum(torch.tensor(data.y).to(device), dim=1)
+            cls_loss = loss_fn(output, y)
+            loss = cls_loss + alpha_link * l.mean() + alpha_entropy * e.mean()
 
-        # Ensure data.y is already on the device and properly processed
-        y = torch.tensor(data.y).to(device)
 
-        # If data.y needs to be summed along a dimension, do it directly
-        y = torch.sum(y, dim=1)
+        # Compute and store metrics
+        cls_loss_val = cls_loss.item()
+        link_loss_val = l.mean().item()
+        entropy_val = e.mean().item()
 
-        # Compute loss
-        cls_loss = loss_fn(output, y)
+        # Append to smoothing buffers
+        rolling_cls_loss.append(cls_loss_val)
+        rolling_link_loss.append(link_loss_val)
+        rolling_entropy.append(entropy_val)
 
-        loss = cls_loss + alpha_link * l.mean() + alpha_entropy * e.mean()
+        # Compute smoothed averages
+        smoothed_cls = sum(rolling_cls_loss) / len(rolling_cls_loss)
+        smoothed_link = sum(rolling_link_loss) / len(rolling_link_loss)
+        smoothed_entropy = sum(rolling_entropy) / len(rolling_entropy)
 
-        if verbose:
-            print(f"LOSS: error={cls_loss}, Link loss={l}, Entropy loss={e}, Final={loss}")
+        cls_loss_timeline.append(cls_loss_val)
+        link_loss_timeline.append(link_loss_val)
+        entropy_loss_timeline.append(entropy_val)
 
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        # Update tqdm bar
+        pbar.set_postfix({
+            "ClsLoss": f"{smoothed_cls:.4f}",
+            "Link": f"{alpha_link * smoothed_link:.4f}",
+            "Entropy": f"{alpha_entropy * smoothed_entropy:.4f}"
+        })
 
         # Accumulate loss
         total_loss += (loss.item() * y.size(0))
@@ -237,6 +274,12 @@ def train(model, loader, optimizer, loss_fn, device,
     if return_acc:
         accuracy = correct_predictions / total_samples
         return average_loss, accuracy
+
+    plt.figure(figsize=(12, 8), dpi=300)
+    plt.plot(rolling_cls_loss)
+    plt.plot(rolling_link_loss)
+    plt.plot(rolling_entropy)
+    plt.show()
 
     return average_loss
 
@@ -354,7 +397,7 @@ def train_and_validate(model, train_loader, val_loader,
 
         train_loss, train_acc = train(
             model=model, loader=train_loader, optimizer=optimizer, loss_fn=loss_fn,
-            return_acc=True, verbose=verbose, device=device, alpha_link=2, alpha_entropy=0.5)
+            return_acc=True, verbose=verbose, device=device, alpha_link=1000, alpha_entropy=0.1)
         val_acc, val_macro_f1, val_y_true, val_y_pred, val_loss, cr_val = test(model, val_loader, loss_fn,
                                                                                device=device, verbose=verbose)
         # train_acc, train_macro_f1, train_y_true, train_y_pred, train_loss, cr_train = test(model, train_loader, loss_fn)
@@ -401,6 +444,13 @@ def train_and_validate(model, train_loader, val_loader,
                 logging.info(f"Confusion matrix for 'validation' set")
                 cm = confusion_matrix(val_y_true, val_y_pred)
                 logging.info(f"\n{cm}")
+
+        completeness_calculator = ConceptCompletenessCalculatorV2(model, train_loader, val_loader, device)
+        completeness_scores = completeness_calculator.calculate_concept_completeness()
+
+        logging.info("\nFinal Concept Completeness Scores (per layer):")
+        for layer, (avg_score, std_score) in enumerate(list(completeness_scores), start=1):
+            logging.info(f"Layer {layer}: {avg_score:.4f} ± {std_score:.4f}")
 
         times.append(time.time() - start_time)
 

@@ -125,28 +125,29 @@ def main():
     # Define loss function
     start_time = time.time()
     class_weights = calculate_class_weights(tgd_train, device=DEVICE)
-    loss_fn = nn.NLLLoss(weight=class_weights)
+    # loss_fn = nn.NLLLoss(weight=class_weights)
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
 
     # # Train and validate the model
-    # best_model_path = train_and_validate(
-    #     model=model,
-    #     train_loader=train_loader,
-    #     val_loader=val_loader,
-    #     optimizer=optimizer,
-    #     loss_fn=loss_fn,
-    #     patience=CONFIG["PATIENCE"],
-    #     epochs=CONFIG["EPOCHS"],
-    #     lr=CONFIG["LR"],
-    #     hidden_dim=CONFIG["HIDDEN_DIM"],
-    #     batch_size=CONFIG["BATCH_SIZE"],
-    #     use_softmax=CONFIG["SOFTMAX_ASSIGN"],
-    #     decrease_prop=CONFIG["DECREASE_PROPORTION"],
-    #     dataset_name = CONFIG["DATASET"],
-    #     grid_search=False,
-    #     verbose=False,
-    #     device=DEVICE,
-    #     timestamp=timestamp
-    # )
+    best_model_path = train_and_validate(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        loss_fn=loss_fn,
+        patience=CONFIG["PATIENCE"],
+        epochs=CONFIG["EPOCHS"],
+        lr=CONFIG["LR"],
+        hidden_dim=CONFIG["HIDDEN_DIM"],
+        batch_size=CONFIG["BATCH_SIZE"],
+        use_softmax=CONFIG["SOFTMAX_ASSIGN"],
+        decrease_prop=CONFIG["DECREASE_PROPORTION"],
+        dataset_name = CONFIG["DATASET"],
+        grid_search=False,
+        verbose=False,
+        device=DEVICE,
+        timestamp=timestamp
+    )
     best_model_path = "models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
     logging.info(f"Train and Validation model finished after {format_time_elapsed(start_time)}")
 
@@ -162,6 +163,8 @@ def main():
         logging.info(f"Best model evaluation finished after {format_time_elapsed(start_time)}")
     else:
         logging.info("No best model was saved.")
+
+
 
 
 if __name__ == "__main__":
