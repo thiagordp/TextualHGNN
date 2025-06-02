@@ -172,41 +172,119 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
 
 def compute_aux_losses(model_outputs, data, loss_config):
     """
-    Compute auxiliary losses using the detailed DiffPool model output.
+    Compute auxiliary losses based on interpretable concept structure.
 
-    Args:
-        model_outputs: Output tuple from model(x, adj, mask, debug=True)
-        data: Input batch containing .x
-        loss_config: Dict with keys like 'link', 'entropy', 'reconstruction'
+    Input:
+        model_outputs:
+            Tuple from model(..., debug=True):
+                logits: [B, num_classes]
+                link_loss: scalar per-graph structural loss
+                entropy_loss: scalar per-graph entropy regularization
+                emb_l1: [B, C, d]     # Level-1 concept embeddings
+                emb_l2: [B, C2, d]    # Level-2 concept embeddings (unused here)
+                s01: [B, N, C]        # Soft assignment of N tokens to C clusters
+                s12: [B, C, C2]       # (unused)
+
+        data:
+            Batch object with:
+                x: [B, N, d] — token embeddings
+
+        loss_config:
+            Dictionary specifying the weight for each loss component.
 
     Returns:
-        torch.Tensor (scalar loss)
+        aux_loss: scalar tensor to be added to total loss
     """
+
     logits, link_loss, entropy_loss, (emb_l1, _), (emb_l2, _), (s01, s12) = model_outputs
     x = data.x  # [B, N, d]
+    B, N, d = x.shape
+    _, _, C = s01.shape  # C: number of concepts
 
     aux_loss = 0.0
 
-    # Link prediction loss
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (1) Link Prediction Loss
+    # Encourages cluster assignments to preserve adjacency structure:
+    #
+    #   \mathcal{L}_{link} = \lVert A - SS^\top \rVert_F^2
+    #
+    # (computed inside DiffPool)
+    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("link", 0.0) > 0:
         aux_loss += loss_config["link"] * link_loss.mean()
 
-    # Entropy regularization
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (2) Entropy Loss
+    # Encourages sharper (low-entropy) cluster assignments:
+    #
+    #   \mathcal{L}_{entropy} = \sum_{i,c} S_{ic} \log S_{ic}
+    #
+    # (also from DiffPool)
+    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("entropy", 0.0) > 0:
         aux_loss += loss_config["entropy"] * entropy_loss.mean()
 
-    # Reconstruction loss (batched)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (3) Reconstruction Loss
+    # Encourage each concept embedding to be close to the mean of its tokens:
+    #
+    #   \bar{x}_c = \frac{1}{\sum_i S_{ic}} \sum_i S_{ic} x_i
+    #   \mathcal{L}_{recon} = \sum_c \lVert z_c - \bar{x}_c \rVert^2
+    #
+    # where z_c = emb_l1[c]
+    # ─────────────────────────────────────────────────────────────────────────────
+    s_sum = s01.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1, C]
+    s_norm = s01 / s_sum  # [B, N, C]
+    x_bar = torch.einsum("bnc,bnd->bcd", s_norm, x)  # [B, C, d]
+
     if loss_config.get("reconstruction", 0.0) > 0:
-        # x: [B, N, d], s01: [B, N, C], emb_l1: [B, C, d]
-        B, N, d = x.shape
-        _, _, C = s01.shape
-
-        s_sum = s01.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1, C]
-        s_norm = s01 / s_sum  # [B, N, C]
-        x_bar = torch.einsum("bnc,bnd->bcd", s_norm, x)  # [B, C, d]
-
         recon_loss = F.mse_loss(emb_l1, x_bar)
         aux_loss += loss_config["reconstruction"] * recon_loss
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (4) Contrastive Loss (InfoNCE)
+    # Pull each cluster embedding toward its x_bar; push away from others:
+    #
+    #   \mathcal{L}_{con} = -\sum_c \log \frac{ \exp(\cos(z_c, \bar{x}_c)/\tau) }
+    #                                      { \sum_{c'} \exp(\cos(z_c, \bar{x}_{c'})/\tau) }
+    #
+    # with temperature \tau = 0.07
+    # ─────────────────────────────────────────────────────────────────────────────
+    if loss_config.get("contrastive", 0.0) > 0:
+        z_c = F.normalize(emb_l1, dim=-1)  # [B, C, d]
+        x_c = F.normalize(x_bar, dim=-1)  # [B, C, d]
+        sim = torch.einsum("bcd,bkd->bck", z_c, x_c) / 0.07  # [B, C, C]
+        log_prob = F.log_softmax(sim, dim=-1)
+        contrastive_loss = -log_prob.diagonal(dim1=1, dim2=2).mean()
+        aux_loss += loss_config["contrastive"] * contrastive_loss
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (5) Balance Loss
+    # Encourage clusters to receive equal total assignment:
+    #
+    #   \mathcal{L}_{balance} = \sum_j \left( \sum_i S_{ij} \right)^2
+    #
+    # ─────────────────────────────────────────────────────────────────────────────
+    if loss_config.get("balance", 0.0) > 0:
+        size = s01.sum(dim=1)  # [B, C]
+        balance_loss = (size ** 2).mean()
+        aux_loss += loss_config["balance"] * balance_loss
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # (6) Repel Loss
+    # Encourage concept embeddings to be diverse (repel each other):
+    #
+    #   \mathcal{L}_{repel} = \sum_{j \ne k} \max(0, \delta - \lVert z_j - z_k \rVert^2)
+    #
+    # ─────────────────────────────────────────────────────────────────────────────
+    if loss_config.get("repel", 0.0) > 0:
+        z = emb_l1  # [B, C, d]
+        zz = z.unsqueeze(2) - z.unsqueeze(1)  # [B, C, C, d]
+        dist = (zz ** 2).sum(dim=-1)  # [B, C, C]
+        mask = ~torch.eye(C, device=z.device).bool()  # [C, C]
+        repel_loss = F.relu(1.0 - dist.masked_select(mask[None])).mean()
+        aux_loss += loss_config["repel"] * repel_loss
 
     return aux_loss
 
@@ -273,7 +351,7 @@ def train(
         optimizer.zero_grad()
 
         with autocast(enabled=torch.cuda.is_available()):
-            model_outputs =model(data.x, data.adj, data.mask, debug=True)
+            model_outputs = model(data.x, data.adj, data.mask, debug=True)
             logits, obj1, obj2, g_layer1, g_layer2, s = model_outputs
 
             y = torch.as_tensor(data.y, device=device).squeeze()
@@ -395,7 +473,6 @@ def test(model, loader, loss_fn, device, verbose=True):
     average_loss = total_loss / len(loader.dataset)
 
     cr = classification_report(true_labels, pred_labels, output_dict=True)
-
     return accuracy, macro_f1, true_labels, pred_labels, average_loss, cr
 
 

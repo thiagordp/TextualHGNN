@@ -21,23 +21,29 @@ PARAMS_GRIDSEARCH = {
         "DECREASE_PROPORTION": [0.1]
     },
     "italian": {
-        'LR': [],
-        'INNER_DIM': [],
-        'BATCH_SIZE': [],
-        'SOFTMAX_ASSIGN': [],
-        "DECREASE_PROPORTION": []
+        'LR': [0.0001],
+        'INNER_DIM': [16],
+        'BATCH_SIZE': [4],
+        'SOFTMAX_ASSIGN': [True],
+        "DECREASE_PROPORTION": [0.05]
     }
 }
 
 LOSS_CONFIG_GRID = [
-    #{"id": "baseline", "link": 0.0, "entropy": 0.0, "reconstruction": 0.0},
-    #{"id": "struct", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0},
-    {"id": "recon_small", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01},
-    {"id": "recon_med", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1},
+    {"id": "all_large",    "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1,  "contrastive": 0.01, "balance": 0.1, "repel": 0.1},
+#    {"id": "baseline", "link": 0.0, "entropy": 0.0, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
+#    {"id": "struct_only", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
+#    {"id": "recon_small", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
+#    {"id": "recon_med",   "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1,  "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
+#    {"id": "contrastive", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0,  "contrastive": 0.01, "balance": 0.0, "repel": 0.0},
+#    {"id": "semantic_combo", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.01, "balance": 0.0, "repel": 0.0},
+#    {"id": "balance_only", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.1, "repel": 0.0},
+#    {"id": "repel_only",   "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.1},
+#    {"id": "all_small",    "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.01, "balance": 0.1, "repel": 0.1},
 ]
 
-# LANG = "italian"
-LANG = "english"
+LANG = "italian"
+# LANG = "english"
 PARAM_GRID = PARAMS_GRIDSEARCH[LANG]
 CONFIG = load_config(LANG, "src/utils/config.json")
 
@@ -75,29 +81,26 @@ def grid_search():
 
         for loss_config in LOSS_CONFIG_GRID:
             loss_id = loss_config["id"]
-            loss_link = loss_config["link"]
-            loss_entropy = loss_config["entropy"]
-            loss_reconstruction = loss_config["reconstruction"]
-
             iteration += 1
-            logging.info(f"")
 
-            logging.info(
-                f"||||||||||||||||||||||| Testing combination {iteration} out of {num_combinations}  ||||||||||||||||||||||||||||||")
-            logging.info(
-                f"Testing configuration:\n\tlr={lr}\n\tinner_dim={inner_dim}\n\tBATCH_SIZE={batch_size}\n\tSOFTMAX_ASSIGN={softmax_assign}\n\tDecrease Proportion={decrease_proportion}")
-            logging.info(
-                f"Testing loss alphas:\n\tloss={loss_link}\n\tentropy={loss_entropy}\n\treconstruction={loss_reconstruction}"
-            )
-            logging.info(
-                "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+            logging.info("\n" + "=" * 100)
+            logging.info(f"[{iteration}/{num_combinations}] Grid Search Configuration")
+            logging.info(f"Model Params:\n"
+                         f"  LR={lr}\n"
+                         f"  INNER_DIM={inner_dim}\n"
+                         f"  BATCH_SIZE={batch_size}\n"
+                         f"  SOFTMAX_ASSIGN={softmax_assign}\n"
+                         f"  DECREASE_PROPORTION={decrease_proportion}")
+            logging.info(f"Loss Config ({loss_id}):")
+            for k in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
+                logging.info(f"  {k.upper():<12} = {loss_config.get(k, 0.0)}")
 
             CONFIG.update({
                 'LR': lr,
-                'INNER_DIM': inner_dim,
-                'BATCH_SIZE': batch_size,
-                'SOFTMAX_ASSIGN': softmax_assign,
-                'DECREASE_PROPORTION': decrease_proportion
+                'INNER_DIM': int(inner_dim),
+                'BATCH_SIZE': int(batch_size),
+                'SOFTMAX_ASSIGN': bool(softmax_assign),
+                'DECREASE_PROPORTION': float(decrease_proportion)
             })
 
             tgd_train, tgd_val, tgd_test = load_datasets(
@@ -153,37 +156,41 @@ def grid_search():
             )
 
             if best_model_path:
-                results.append({
+                result_row = {
                     "LR": lr,
                     "INNER_DIM": inner_dim,
                     "BATCH_SIZE": batch_size,
                     "SOFTMAX_ASSIGN": softmax_assign,
                     "DECREASE_PROPORTION": decrease_proportion,
-                    "LOSS_CONFIG_ID": loss_config["id"],
-                    "LINK": loss_config["link"],
-                    "ENTROPY": loss_config["entropy"],
-                    "RECON": loss_config["reconstruction"],
-                    "VAL_MACRO_F1": val_macro_f1,
-                    "COMPLETENESS": avg_completeness,
-                    "HYBRID_SCORE": hybrid_score,
-                    "MODEL_PATH": best_model_path
-                })
+                    "LOSS_CONFIG_ID": loss_id,
+                    "VAL_MACRO_F1": round(val_macro_f1, 4),
+                    "COMPLETENESS": round(avg_completeness, 4),
+                    "HYBRID_SCORE": round(hybrid_score, 4),
+                    "MODEL_PATH": best_model_path,
+                }
 
+                # Append all loss weights with consistent formatting
+                for key in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
+                    result_row[f"LOSS_{key.upper()}"] = loss_config.get(key, 0.0)
+
+                results.append(result_row)
+
+                # Track best by hybrid score
                 if hybrid_score > best_hybrid_score:
                     best_hybrid_score = hybrid_score
-                    best_config = results[-1]
+                    best_val_f1 = val_macro_f1
+                    best_config = result_row
 
-            logging.info(
-                f"Finished configuration:\n\tlr={lr}\n\tinner_dim={inner_dim}\n\tBATCH_SIZE={batch_size}\n\tSOFTMAX_ASSIGN={softmax_assign}\n\tDecrease Proportion={decrease_proportion}")
-            logging.info(f"Finished config {loss_id} | F1: {val_macro_f1:.4f} | Comp: {avg_completeness:.4f} | Hybrid: {hybrid_score:.4f}")
+            logging.info(f"[Result] ID: {loss_id} | F1: {val_macro_f1:.4f} | "
+                         f"Comp: {avg_completeness:.4f} | Hybrid: {hybrid_score:.4f}")
 
     # Save all results to CSV
-    # Save all results
     df = pd.DataFrame(results)
     csv_path = f"gridsearch_results_{CONFIG['DATASET']}.xlsx"
     df.to_excel(csv_path, index=False)
-    logging.info(f"Grid search results saved to: {csv_path}")
-    logging.info(f"Best configuration:\n{json.dumps(best_config, indent=4)}")
+    logging.info(f"\nGrid search results saved to: {csv_path}")
+    logging.info(f"\nBest configuration by hybrid score:\n{json.dumps(best_config, indent=4)}")
+
 
 if __name__ == "__main__":
     grid_search()
