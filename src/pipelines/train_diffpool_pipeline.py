@@ -87,6 +87,13 @@ def main():
     logging.info("Current directory: " + os.getcwd())
     timestamp = get_timestamp()
 
+    LOSS_CONFIGS = [
+        {"id": "baseline", "link": 0.0, "entropy": 0.0, "reconstruction": 0.0},
+        {"id": "struct", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0},
+        {"id": "recon_small", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01},
+        {"id": "recon_med", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1},
+    ]
+
     # Load datasets
     start_time = time.time()
     tgd_train, tgd_val, tgd_test = load_datasets(
@@ -143,12 +150,13 @@ def main():
         use_softmax=CONFIG["SOFTMAX_ASSIGN"],
         decrease_prop=CONFIG["DECREASE_PROPORTION"],
         dataset_name = CONFIG["DATASET"],
-        grid_search=False,
-        verbose=False,
+        grid_search=True,
+        verbose=True,
         device=DEVICE,
-        timestamp=timestamp
+        timestamp=timestamp,
+        loss_config=LOSS_CONFIGS
     )
-    best_model_path = "models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
+    #best_model_path = "models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
     logging.info(f"Train and Validation model finished after {format_time_elapsed(start_time)}")
 
     # Load the best model and evaluate on train, validation, and test datasets
@@ -156,8 +164,6 @@ def main():
     start_time = time.time()
     if best_model_path:
         model.load_state_dict(torch.load(best_model_path))
-        #evaluate_model(model, train_loader, loss_fn, "Train", device=DEVICE)
-        #evaluate_model(model, val_loader, loss_fn, "Validation", device=DEVICE)
         evaluate_model(model, test_loader, loss_fn, "Test", device=DEVICE)
 
         logging.info(f"Best model evaluation finished after {format_time_elapsed(start_time)}")

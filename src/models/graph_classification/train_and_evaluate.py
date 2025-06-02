@@ -3,22 +3,23 @@ import logging
 import os
 import time
 from collections import deque
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch_geometric.transforms as T
-from matplotlib import pyplot as plt
+import torch.nn.functional as F
 from sklearn.metrics import classification_report, f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
+from torch_geometric.data import DataLoader
 from torch_geometric.loader import DenseDataLoader
 from tqdm import tqdm
 
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
 from src.models.graph_classification.gnn import DiffPool
+from src.models.graph_classification.utils import loss_config_to_tag
 from src.models.graph_explainability.cg_evaluation_metrics import ConceptCompletenessCalculatorV2
-from src.utils.models_utils import get_timestamp
 
 
 def calculate_class_weights(dataset: TextGraphDatasetOnDisk, device: torch.device) -> torch.Tensor:
@@ -160,7 +161,6 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
     ).to(device)
 
     logging.info(f"Model structure:")
-    # logging.info(summary(model))
     logging.info(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -169,8 +169,60 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
     return model, optimizer
 
 
-def train(model, loader, optimizer, loss_fn, device,
-          alpha_link=0.7, alpha_entropy=0.3, return_acc=False, verbose=True):
+
+def compute_aux_losses(model_outputs, data, loss_config):
+    """
+    Compute auxiliary losses using the detailed DiffPool model output.
+
+    Args:
+        model_outputs: Output tuple from model(x, adj, mask, debug=True)
+        data: Input batch containing .x
+        loss_config: Dict with keys like 'link', 'entropy', 'reconstruction'
+
+    Returns:
+        torch.Tensor (scalar loss)
+    """
+    logits, link_loss, entropy_loss, (emb_l1, _), (emb_l2, _), (s01, s12) = model_outputs
+    x = data.x  # [B, N, d]
+
+    aux_loss = 0.0
+
+    # Link prediction loss
+    if loss_config.get("link", 0.0) > 0:
+        aux_loss += loss_config["link"] * link_loss.mean()
+
+    # Entropy regularization
+    if loss_config.get("entropy", 0.0) > 0:
+        aux_loss += loss_config["entropy"] * entropy_loss.mean()
+
+    # Reconstruction loss (batched)
+    if loss_config.get("reconstruction", 0.0) > 0:
+        # x: [B, N, d], s01: [B, N, C], emb_l1: [B, C, d]
+        B, N, d = x.shape
+        _, _, C = s01.shape
+
+        s_sum = s01.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1, C]
+        s_norm = s01 / s_sum  # [B, N, C]
+        x_bar = torch.einsum("bnc,bnd->bcd", s_norm, x)  # [B, C, d]
+
+        recon_loss = F.mse_loss(emb_l1, x_bar)
+        aux_loss += loss_config["reconstruction"] * recon_loss
+
+    return aux_loss
+
+
+def train(
+        model: torch.nn.Module,
+        loader: DataLoader,
+        optimizer: torch.optim.Optimizer,
+        loss_fn,
+        device: torch.device,
+        loss_config: dict,
+        accumulation_steps: int = 5,  # 👈  New
+        scaler: Optional[GradScaler] = None,
+        return_acc: bool = False,
+        verbose: bool = True,
+) -> Tuple[float, Optional[float]]:
     """
     Trains the GNN model for one epoch.
 
@@ -179,10 +231,11 @@ def train(model, loader, optimizer, loss_fn, device,
         loader (torch_geometric.data.DataLoader): DataLoader providing the training data.
         optimizer (torch.optim.Optimizer): Optimizer for model parameters.
         device
-        alpha_link
-        alpha_entropy
+        loss_config (dict): Loss configuration dictionary.
         verbose
         loss_fn (callable): Loss function to be minimized.
+        accumulation_steps
+        scaler
         return_acc (bool, optional): If True, returns the training accuracy along with the loss. Defaults to False.
 
     Returns:
@@ -196,92 +249,84 @@ def train(model, loader, optimizer, loss_fn, device,
         - The loss is calculated for each batch and accumulated to compute the average loss.
         - If `return_acc` is True, the function also computes and returns the accuracy.
     """
+    assert accumulation_steps >= 1, "`accumulation_steps` must be ≥ 1"
+
     model.train()
 
-    total_loss = 0.0
-    correct_predictions = 0
-    total_samples = 0
+    scaler = scaler or GradScaler(enabled=torch.cuda.is_available())
 
-    batch = 0
+    total_loss, seen_samples = 0.0, 0
+    correct_preds = 0
 
+    # Smoothing helpers
     window_size = 10
-    rolling_cls_loss = deque(maxlen=window_size)
-    rolling_link_loss = deque(maxlen=window_size)
-    rolling_entropy = deque(maxlen=window_size)
+    roll_cls, roll_link, roll_ent = (
+        deque(maxlen=window_size) for _ in range(3)
+    )
 
-    # ✅ Create tqdm instance as a variable
-    pbar = tqdm(loader, desc="Processing Training Batches")
+    pbar = tqdm(loader, disable=False, desc="Train")
+    optimizer.zero_grad(set_to_none=True)  # more efficient
 
-    cls_loss_timeline = []
-    link_loss_timeline = []
-    entropy_loss_timeline = []
+    for step, data in enumerate(pbar, start=1):
 
-    scaler = GradScaler()
-
-    for data in pbar:  # iterate over pbar, not tqdm(loader)
-        batch += 1
         data = data.to(device)
         optimizer.zero_grad()
 
-        with autocast():  # AMP context
-            output, l, e = model(data.x, data.adj, data.mask)
-            y = torch.sum(torch.tensor(data.y).to(device), dim=1)
-            cls_loss = loss_fn(output, y)
-            loss = cls_loss + alpha_link * l.mean() + alpha_entropy * e.mean()
+        with autocast(enabled=torch.cuda.is_available()):
+            model_outputs =model(data.x, data.adj, data.mask, debug=True)
+            logits, obj1, obj2, g_layer1, g_layer2, s = model_outputs
 
+            y = torch.as_tensor(data.y, device=device).squeeze()
+            if y.dim() > 1:
+                y = y.sum(dim=1)  # keep your original intention
 
-        # Compute and store metrics
-        cls_loss_val = cls_loss.item()
-        link_loss_val = l.mean().item()
-        entropy_val = e.mean().item()
-
-        # Append to smoothing buffers
-        rolling_cls_loss.append(cls_loss_val)
-        rolling_link_loss.append(link_loss_val)
-        rolling_entropy.append(entropy_val)
-
-        # Compute smoothed averages
-        smoothed_cls = sum(rolling_cls_loss) / len(rolling_cls_loss)
-        smoothed_link = sum(rolling_link_loss) / len(rolling_link_loss)
-        smoothed_entropy = sum(rolling_entropy) / len(rolling_entropy)
-
-        cls_loss_timeline.append(cls_loss_val)
-        link_loss_timeline.append(link_loss_val)
-        entropy_loss_timeline.append(entropy_val)
+            cls_loss = loss_fn(logits, y)
+            aux_loss = compute_aux_losses(model_outputs, data, loss_config or {})
+            loss = (cls_loss + aux_loss) / accumulation_steps
 
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
 
-        # Update tqdm bar
-        pbar.set_postfix({
-            "ClsLoss": f"{smoothed_cls:.4f}",
-            "Link": f"{alpha_link * smoothed_link:.4f}",
-            "Entropy": f"{alpha_entropy * smoothed_entropy:.4f}"
-        })
+        # Update after every `accumulation_steps` mini-batches
+        if step % accumulation_steps == 0 or step == len(loader):
+            # Optional gradient clipping BEFORE scaler.step
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-        # Accumulate loss
-        total_loss += (loss.item() * y.size(0))
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
 
-        # Calculate accuracy
+        # # --- Metrics & logging ------------------------------------------------
+        #
+        # cls_val, link_val, ent_val = (
+        #     cls_loss.item(),
+        #     link_loss.mean().item(),
+        #     ent_loss.mean().item(),
+        # )
+        # roll_cls.append(cls_val)
+        # roll_link.append(link_val)
+        # roll_ent.append(ent_val)
+        #
+        # pbar.set_postfix(
+        #     cls=f"{sum(roll_cls) / len(roll_cls):.4f}",
+        #     link=f"{alpha_link * sum(roll_link) / len(roll_link):.4f}",
+        #     ent=f"{alpha_entropy * sum(roll_ent) / len(roll_ent):.4f}",
+        # )
+        # pbar.update(0)  # 👈 Force redraw
+
+        batch_size = y.size(0)
+        total_loss += loss.item() * accumulation_steps * batch_size  # undo /acc_steps
+        seen_samples += batch_size
+
         if return_acc:
-            _, predicted = torch.max(output, dim=1)  # Assuming output is logits
-            correct_predictions += (predicted == y).sum().item()
-            total_samples += y.size(0)
+            preds = logits.argmax(dim=1)
+            correct_preds += (preds == y).sum().item()
 
-    average_loss = total_loss / len(loader.dataset)
-
-    if return_acc:
-        accuracy = correct_predictions / total_samples
-        return average_loss, accuracy
-
-    plt.figure(figsize=(12, 8), dpi=300)
-    plt.plot(rolling_cls_loss)
-    plt.plot(rolling_link_loss)
-    plt.plot(rolling_entropy)
-    plt.show()
-
-    return average_loss
+    # logging.info(
+    #     f"Loss information:\tcls={sum(roll_cls) / len(roll_cls):.4f},\tlink={alpha_link * sum(roll_link) / len(roll_link):.4f},\tent={alpha_entropy * sum(roll_ent) / len(roll_ent):.4f}")
+    avg_loss = total_loss / seen_samples
+    avg_acc = (correct_preds / seen_samples) if return_acc else None
+    return (avg_loss, avg_acc) if return_acc else avg_loss
 
 
 @torch.no_grad()
@@ -339,9 +384,10 @@ def test(model, loader, loss_fn, device, verbose=True):
 
         # Optionally print predictions
         if verbose:
-            print("*" * 50)
-            print(f"y_pred: {predicted.tolist()}")
-            print(f"y_true: {y.tolist()}")
+            # print("*" * 50)
+            # print(f"y_pred: {predicted.tolist()}")
+            # print(f"y_true: {y.tolist()}")
+            pass
 
     # Calculate evaluation metrics
     accuracy = total_correct / len(loader.dataset)
@@ -356,7 +402,8 @@ def test(model, loader, loss_fn, device, verbose=True):
 # Training and Validation Loop
 def train_and_validate(model, train_loader, val_loader,
                        optimizer, loss_fn, patience, epochs, lr, hidden_dim, batch_size,
-                       use_softmax, decrease_prop, dataset_name, device, timestamp, grid_search=False, verbose=True):
+                       use_softmax, decrease_prop, dataset_name, device, timestamp, grid_search=False, verbose=True,
+                       loss_config={}):
     """
     Train and validate the model.
 
@@ -382,88 +429,92 @@ def train_and_validate(model, train_loader, val_loader,
 
     """
     best_val_f1 = 0
+    best_hybrid = 0
     best_epoch = 0
     best_model_path = None
+    best_completeness = 0
     times = []
 
     # timestamp = get_timestamp()
-
+    loss_tag = loss_config_to_tag(loss_config)
     writer = SummaryWriter(
-        f"runs/diffpool_{dataset_name}_{timestamp}_pat{patience}_ep{epochs}_lr{lr}_hd{hidden_dim}_bs{batch_size}_sm{use_softmax}_dp{decrease_prop}_gs{grid_search}"
+        f"runs/diffpool_{dataset_name}_{timestamp}_pat{patience}_ep{epochs}_lr{lr}_hd{hidden_dim}_bs{batch_size}_sm{use_softmax}_dp{decrease_prop}_{loss_tag}_gs{grid_search}"
     )
 
     for epoch in range(1, epochs + 1):
         start_time = time.time()
 
         train_loss, train_acc = train(
-            model=model, loader=train_loader, optimizer=optimizer, loss_fn=loss_fn,
-            return_acc=True, verbose=verbose, device=device, alpha_link=1000, alpha_entropy=0.1)
-        val_acc, val_macro_f1, val_y_true, val_y_pred, val_loss, cr_val = test(model, val_loader, loss_fn,
-                                                                               device=device, verbose=verbose)
-        # train_acc, train_macro_f1, train_y_true, train_y_pred, train_loss, cr_train = test(model, train_loader, loss_fn)
+            model=model,
+            loader=train_loader,
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            return_acc=True,
+            verbose=verbose,
+            device=device,
+            loss_config=loss_config
+        )
+
+        val_acc, val_macro_f1, val_y_true, val_y_pred, val_loss, cr_val = test(
+            model, val_loader, loss_fn, device=device, verbose=verbose
+        )
+
+        completeness_calculator = ConceptCompletenessCalculatorV2(model, train_loader, val_loader, device)
+        completeness_scores = completeness_calculator.calculate_concept_completeness()
+        avg_completeness = sum(score for score, _ in completeness_scores) / len(completeness_scores)
+
+        hybrid_score = 0.5 * val_macro_f1 + 0.5 * avg_completeness
 
         writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Accuracy/train', train_acc, epoch)
         writer.add_scalar('Loss/val', val_loss, epoch)
         writer.add_scalar('Accuracy/val', val_acc, epoch)
+        writer.add_scalar('ConceptCompleteness/val', avg_completeness, epoch)
+        writer.add_scalar('HybridScore/val', hybrid_score, epoch)
 
-        logging.info(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, '
-                     f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
-                     f'Val Macro F1: {val_macro_f1:.4f}')
+        logging.info(f'Epoch {epoch:03d} | Train Loss: {train_loss:.4f} | '
+                     f'Val Acc: {val_acc:.4f} | Val F1: {val_macro_f1:.4f} | '
+                     f'Completeness: {avg_completeness:.4f} | Hybrid: {hybrid_score:.4f}')
 
-        if val_macro_f1 > best_val_f1:
+        if hybrid_score > best_hybrid:
             best_val_f1 = val_macro_f1
+            best_completeness = avg_completeness
+            best_hybrid = hybrid_score
             best_epoch = epoch
 
             model_name = type(model).__name__
+            path_prefix = "models/grid_search" if grid_search else "models"
+            model_dir = f"{path_prefix}/{dataset_name}/"
+            os.makedirs(model_dir, exist_ok=True)
 
-            if grid_search:
-                best_model_path = f"models/grid_search/{dataset_name}/"
-            else:
-                best_model_path = f"models/{dataset_name}/"
-
-            os.makedirs(best_model_path, exist_ok=True)
-
-            best_model_path = best_model_path + (f'{dataset_name}_{model_name}_{timestamp}_'
-                                                 f'lr{lr}_hd{hidden_dim}_bs{batch_size}_'
-                                                 f'softmax{use_softmax}_decrease_prop{decrease_prop}_'
-                                                 f'valmacrof1score{best_val_f1:.4f}_epoch{best_epoch:03d}.pth')
+            best_model_path = os.path.join(
+                model_dir,
+                f'{dataset_name}_{model_name}_{timestamp}_'
+                f'lr{lr}_hd{hidden_dim}_bs{batch_size}_'
+                f'softmax{use_softmax}_dp{decrease_prop}_'
+                f'{loss_tag}_f1{val_macro_f1:.4f}_comp{avg_completeness:.4f}_hyb{hybrid_score:.4f}_ep{best_epoch:03d}.pth'
+            )
             torch.save(model.state_dict(), best_model_path)
-
-            # logging.info("Classification Report for 'train' set")
-            # logging.info(f"\n{json.dumps(cr_train, indent=3)}")
-            #
-            # logging.info(f"Confusion matrix for 'train' set")
-            # cm = confusion_matrix(train_y_true, train_y_pred)
-            # logging.info(f"\n{cm}")
 
             if verbose:
                 logging.info("Classification Report for 'validation' set")
                 logging.info(f"\n{json.dumps(cr_val, indent=3)}")
 
-                logging.info(f"Confusion matrix for 'validation' set")
                 cm = confusion_matrix(val_y_true, val_y_pred)
                 logging.info(f"\n{cm}")
-
-        completeness_calculator = ConceptCompletenessCalculatorV2(model, train_loader, val_loader, device)
-        completeness_scores = completeness_calculator.calculate_concept_completeness()
-
-        logging.info("\nFinal Concept Completeness Scores (per layer):")
-        for layer, (avg_score, std_score) in enumerate(list(completeness_scores), start=1):
-            logging.info(f"Layer {layer}: {avg_score:.4f} ± {std_score:.4f}")
 
         times.append(time.time() - start_time)
 
         if (epoch - best_epoch) >= patience:
-            logging.info(
-                f"'Early stopping' triggered at epoch {epoch} after {patience} epochs without improvement on Macro F1 score")
+            logging.info("Early stopping triggered.")
             break
 
     if verbose:
         logging.info(f"Median time per epoch: {torch.tensor(times).median():.3f}s")
+
     writer.close()
 
-    return best_model_path
+    return best_model_path, best_val_f1, best_completeness, best_hybrid
 
 
 def evaluate_model(model, loader, loss_fn, dataset_name, device):
