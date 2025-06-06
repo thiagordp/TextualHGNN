@@ -540,7 +540,16 @@ def train_and_validate(model, train_loader, val_loader,
         completeness_scores = completeness_calculator.calculate_concept_completeness()
         avg_completeness = sum(score for score, _ in completeness_scores) / len(completeness_scores)
 
-        hybrid_score = 0.5 * val_macro_f1 + 0.5 * avg_completeness
+        # Harmonic Mean
+        # This formula is particularly sensitive to smaller values, 
+        # making it suitable when you want to penalize extreme discrepancies between the two inputs. 
+        # In the context of combining F1 score and Completeness, this mean ensures that both metrics are balanced, 
+        # and a low value in one cannot be compensated by a high value in the other.
+        # Simple mean: hybrid_score = 0.5 * val_macro_f1 + 0.5 * avg_completeness
+        if val_macro_f1 + avg_completeness > 0:
+            hybrid_score = 2 * val_macro_f1 * avg_completeness / (val_macro_f1 + avg_completeness)
+        else:
+            hybrid_score = 0.0
 
         writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Accuracy/train', train_acc, epoch)

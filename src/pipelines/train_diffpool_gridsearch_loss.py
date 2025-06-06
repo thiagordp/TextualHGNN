@@ -7,6 +7,7 @@ import torch
 import tqdm
 from torch import nn
 import json
+import random 
 
 from src.models.graph_classification.train_and_evaluate import load_datasets, initialize_model, calculate_class_weights, \
     train_and_validate, create_loaders, test
@@ -29,28 +30,62 @@ PARAMS_GRIDSEARCH = {
     }
 }
 
-LOSS_CONFIG_GRID = [
-    {"id": "all_large",    "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1,  "contrastive": 0.01, "balance": 0.1, "repel": 0.1},
-#    {"id": "baseline", "link": 0.0, "entropy": 0.0, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
-#    {"id": "struct_only", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
-#    {"id": "recon_small", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
-#    {"id": "recon_med",   "link": 1500.0, "entropy": 0.2, "reconstruction": 0.1,  "contrastive": 0.0, "balance": 0.0, "repel": 0.0},
-#    {"id": "contrastive", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0,  "contrastive": 0.01, "balance": 0.0, "repel": 0.0},
-#    {"id": "semantic_combo", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.01, "balance": 0.0, "repel": 0.0},
-#    {"id": "balance_only", "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.1, "repel": 0.0},
-#    {"id": "repel_only",   "link": 1500.0, "entropy": 0.2, "reconstruction": 0.0, "contrastive": 0.0, "balance": 0.0, "repel": 0.1},
-#    {"id": "all_small",    "link": 1500.0, "entropy": 0.2, "reconstruction": 0.01, "contrastive": 0.01, "balance": 0.1, "repel": 0.1},
-]
+import itertools
+import random
 
-LANG = "italian"
-# LANG = "english"
+def generate_loss_configs(sample_size=300, seed=42):
+    magnitudes = [1e-2, 1e-1, 1e0, 1e1]
+
+    full_grid = [      ]
+    i = 0
+    for entropy, link, recon, contrast, balance, repel in itertools.product(magnitudes, repeat=6):
+        config = {
+            "id": f"cfg_{i+1:05d}",
+            "link": entropy * 100,
+            "entropy": link,
+            "reconstruction": recon,
+            "contrastive": contrast,
+            "balance": balance,
+            "repel": repel
+        }
+        full_grid.append(config)
+        i += 1
+
+    # Random subset
+    if len(full_grid) > sample_size:
+        random.seed(seed)
+        sampled_grid = random.sample(full_grid, k=sample_size-1)
+
+        sampled_grid.append({
+            "id": f"cfg_00000",
+            "link": 0,
+            "entropy": 0,
+            "reconstruction": 0.0,
+            "contrastive": 0.0,
+            "balance": 0.0,
+            "repel": 0.0
+        })
+
+        # Sort the sampled configurations by 'id'
+        sampled_grid.sort(key=lambda x: x['id'])
+        return sampled_grid
+
+    # If the full grid is smaller than the sample size / sort it by 'id'
+    full_grid.sort(key=lambda x: x['id'])
+    return full_grid
+
+
+LOSS_CONFIG_GRID = generate_loss_configs(sample_size=200)
+
+#LANG = "italian"
+LANG = "english"
 PARAM_GRID = PARAMS_GRIDSEARCH[LANG]
 CONFIG = load_config(LANG, "src/utils/config.json")
 
 # Device configuration
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-setup_logging(log_file=f"training_model_experiment_gridsearch_{CONFIG['DATASET']}.log")
+setup_logging(log_file=f"training_model_experiment_gridsearch_{CONFIG['DATASET']}_loss.log")
 logging.info(f"============  STARTING EXPERIMENT {CONFIG['DATASET']}  ============")
 logging.info(f"CONFIG: \n{json.dumps(CONFIG, indent=3)}")
 
@@ -162,7 +197,8 @@ def grid_search():
                     "BATCH_SIZE": batch_size,
                     "SOFTMAX_ASSIGN": softmax_assign,
                     "DECREASE_PROPORTION": decrease_proportion,
-                    "LOSS_CONFIG_ID": loss_id,
+                    "LOSS_CONFIG_ID": loss_config["id"],
+                    **{k: v for k, v in loss_config.items() if k != "id"},
                     "VAL_MACRO_F1": round(val_macro_f1, 4),
                     "COMPLETENESS": round(avg_completeness, 4),
                     "HYBRID_SCORE": round(hybrid_score, 4),
@@ -170,8 +206,8 @@ def grid_search():
                 }
 
                 # Append all loss weights with consistent formatting
-                for key in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
-                    result_row[f"LOSS_{key.upper()}"] = loss_config.get(key, 0.0)
+                #for key in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
+                #    result_row[f"LOSS_{key.upper()}"] = loss_config.get(key, 0.0)
 
                 results.append(result_row)
 
@@ -186,7 +222,7 @@ def grid_search():
 
     # Save all results to CSV
     df = pd.DataFrame(results)
-    csv_path = f"gridsearch_results_{CONFIG['DATASET']}.xlsx"
+    csv_path = f"gridsearch_results_{CONFIG['DATASET']}_loss.xlsx"
     df.to_excel(csv_path, index=False)
     logging.info(f"\nGrid search results saved to: {csv_path}")
     logging.info(f"\nBest configuration by hybrid score:\n{json.dumps(best_config, indent=4)}")
