@@ -6,18 +6,31 @@ import networkx as nx
 import numpy as np
 import logging
 
-import tqdm
 from torch_geometric.data import HeteroData
 from transformers import AutoTokenizer, AutoModel
 from torch.nn.functional import cosine_similarity, one_hot
 
 # Local imports
-from config import COMMON_DEP_LABELS
+from src.multi_graph.config import COMMON_DEP_LABELS
+
+# --- NEW: Schemas define the required attributes for valid graph components ---
+NODE_SCHEMA = {
+    'word': {'type', 'text', 'x', 'contextual_x', 'position_in_sentence'},
+    'sentence': {'type', 'text', 'x', 'sentence_index'},
+    'document': {'type', 'text', 'x', 'filename'}
+}
+
+EDGE_SCHEMA = {
+    'dep': {'type', 'feature'},
+    'seq': {'type', 'feature'},
+    'same_lemma': {'type', 'feature'},
+    'sim': {'type', 'feature'},
+    'belongs': {'type'}  # 'belongs' edges have no required features
+}
 
 
-# (get_positional_encoding function remains the same)
 def get_positional_encoding(max_len: int, d_model: int) -> torch.Tensor:
-    # ... (code is unchanged)
+    """Generates sinusoidal positional encodings."""
     pe = torch.zeros(max_len, d_model)
     position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
@@ -29,12 +42,13 @@ def get_positional_encoding(max_len: int, d_model: int) -> torch.Tensor:
     return pe
 
 
-# graph_builder.py
-
-# ... (imports and other functions remain the same) ...
-
 class DocumentGraphBuilder:
-    # ... (__init__ and _get_batch_embedding are unchanged) ...
+    """
+    A class to build multi-level, heterogeneous graphs from textual documents.
+    This version implements our final hybrid architecture design and includes
+    a validation and pruning step to ensure data integrity.
+    """
+
     def __init__(self, spacy_model: str, embedding_model: str, similarity_threshold: float):
         logging.info("Initializing DocumentGraphBuilder...")
         self.nlp = spacy.load(spacy_model)
@@ -53,35 +67,131 @@ class DocumentGraphBuilder:
             outputs = self.model(**inputs)
         return outputs.last_hidden_state.mean(dim=1)
 
-    # --- CHANGE: Updated to accept a list of (filename, text) tuples ---
     def process_documents(self, documents: list[tuple[str, str]]) -> tuple[list[nx.MultiDiGraph], list[HeteroData]]:
-        """Processes a list of documents and returns their graph representations."""
-        nx_graphs = []
-        hetero_graphs = []
-        for i, (filename, doc_text) in enumerate(documents):
-            print(f"--- Processing Document {i + 1}/{len(documents)} ({filename}) ---")
-            nx_graph, hetero_graph = self.build_graphs_for_document(doc_text, filename, doc_id=i)
-            nx_graphs.append(nx_graph)
-            hetero_graphs.append(hetero_graph)
-        return nx_graphs, hetero_graphs
+        """
+        Processes documents, validates each resulting graph, and returns lists of
+        only the valid graphs.
+        """
+        valid_nx_graphs = []
+        valid_hetero_graphs = []
 
-    # --- CHANGE: Updated to accept a filename ---
+        for i, (filename, doc_text) in enumerate(documents):
+            logging.info(f"--- Processing Document {i + 1}/{len(documents)} ({filename}) ---")
+
+            # 1. Build the graph for one document
+            nx_graph, hetero_graph = self.build_graphs_for_document(doc_text, filename, doc_id=i)
+
+            # 2. If graph building resulted in an empty graph, skip it
+            if not hetero_graph.node_types:
+                continue
+
+            # 3. Validate the final HeteroData object
+            if self._validate_hetero_data(hetero_graph, filename):
+                valid_nx_graphs.append(nx_graph)
+                valid_hetero_graphs.append(hetero_graph)
+
+        return valid_nx_graphs, valid_hetero_graphs
+
+    def _validate_hetero_data(self, data: HeteroData, filename: str) -> bool:
+        """
+        Performs integrity checks on a HeteroData object. Returns True if valid.
+        """
+        is_valid = True
+        error_messages = []
+
+        # Check Node-Level Integrity
+        for node_type in data.node_types:
+            if 'x' not in data[node_type]:
+                is_valid = False
+                error_messages.append(f"Node type '{node_type}' is missing feature matrix 'x'.")
+                continue
+            if data[node_type].num_nodes != data[node_type].x.size(0):
+                is_valid = False
+                error_messages.append(f"Node type '{node_type}': Mismatch between number of nodes and features.")
+
+        # Check Edge-Level Integrity
+        for edge_type in data.edge_types:
+            edge_index = data[edge_type].edge_index
+            src, _, dst = edge_type
+            if edge_index.numel() > 0:
+                if edge_index[0].max() >= data[src].num_nodes:
+                    is_valid = False
+                    error_messages.append(f"Edge type '{edge_type}': Source index out of bounds.")
+                if edge_index[1].max() >= data[dst].num_nodes:
+                    is_valid = False
+                    error_messages.append(f"Edge type '{edge_type}': Destination index out of bounds.")
+            if 'edge_attr' in data[edge_type] and data[edge_type].edge_index.size(1) != data[edge_type].edge_attr.size(
+                    0):
+                is_valid = False
+                error_messages.append(f"Edge type '{edge_type}': Mismatch between number of edges and edge attributes.")
+
+        if not is_valid:
+            logging.error(f"Graph for document '{filename}' failed validation and will be skipped.")
+            for msg in error_messages:
+                logging.error(f"- {msg}")
+        return is_valid
+
+    def _validate_and_prune_graph(self, nx_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+        """
+        Checks all nodes against a schema, logs detailed information about any invalid
+        nodes and their connections, and then prunes them to ensure graph integrity.
+        """
+        nodes_to_remove = []
+
+        # First, identify all nodes that are invalid
+        for node, data in nx_graph.nodes(data=True):
+            node_type = data.get('type')
+            if not node_type or node_type not in NODE_SCHEMA:
+                nodes_to_remove.append(node)
+                continue
+
+            required_attrs = NODE_SCHEMA[node_type]
+            if not required_attrs.issubset(data.keys()):
+                nodes_to_remove.append(node)
+
+        # If we found invalid nodes, log detailed context before removing them
+        if nodes_to_remove:
+            logging.warning(f"Found {len(nodes_to_remove)} invalid node(s) to be pruned. Logging details:")
+
+            for node_id in nodes_to_remove:
+                node_data = nx_graph.nodes[node_id]
+                log_message = [f"  - Pruning Node ID: '{node_id}'"]
+                log_message.append(f"    - Attributes: {node_data}")
+
+                # Log incoming connections (predecessors)
+                in_edges = list(nx_graph.in_edges(node_id, data=True))
+                if in_edges:
+                    log_message.append(f"    - Connected FROM ({len(in_edges)} edge(s)):")
+                    for u, _, edge_data in in_edges:
+                        log_message.append(
+                            f"      - Node '{u}' (type: {nx_graph.nodes[u].get('type', 'N/A')}) via edge: {edge_data}")
+
+                # Log outgoing connections (successors)
+                out_edges = list(nx_graph.out_edges(node_id, data=True))
+                if out_edges:
+                    log_message.append(f"    - Connected TO ({len(out_edges)} edge(s)):")
+                    for _, v, edge_data in out_edges:
+                        log_message.append(
+                            f"      - Node '{v}' (type: {nx_graph.nodes[v].get('type', 'N/A')}) via edge: {edge_data}")
+
+                # Print the detailed multi-line log message for the node
+                logging.warning("\n".join(log_message))
+
+            # Finally, remove the nodes from the graph
+            nx_graph.remove_nodes_from(nodes_to_remove)
+            logging.info(f"Pruning complete. Removed {len(nodes_to_remove)} invalid node(s).")
+
+        return nx_graph
+
     def build_graphs_for_document(self, doc_text: str, filename: str, doc_id: int) -> tuple[
         nx.MultiDiGraph, HeteroData]:
         """Constructs both graph representations for a single document."""
-
-        def _is_not_content(t):
-            ignore_pos = ["PRP", "PRON", "POS"]
-            return (t.is_stop and t.pos_ not in ignore_pos) or t.is_punct
-
         spacy_doc = self.nlp(doc_text)
         sentences = list(spacy_doc.sents)
         nx_graph = nx.MultiDiGraph(doc_id=doc_id, text=doc_text, filename=filename)
         doc_node_id = f"doc_{doc_id}"
 
-        # ... (rest of the build process is unchanged until document node creation) ...
-        # ... (word and sentence node creation) ...
-        content_words = [tok.text for tok in spacy_doc if not _is_not_content(tok)]
+        content_words = [tok.text for tok in spacy_doc if not ((tok.is_stop and tok.pos_ != "PRP") or tok.is_punct)]
         unique_content_words = sorted(list(set(content_words)))
         word_embeddings_map = {}
         if unique_content_words:
@@ -95,14 +205,15 @@ class DocumentGraphBuilder:
         processed_sentences = []
 
         for sent_idx, sent in enumerate(sentences):
-            word_nodes_in_sent = []
+            potential_word_nodes = []
             contextual_embs_for_sent = []
 
             for token_idx_in_sent, token in enumerate(sent):
                 word_node_id = f"word_{doc_id}_{token.i}"
                 contextual_emb = torch.zeros(self.embedding_dim)
+                is_content_word = not ((token.is_stop and token.pos_ != "PRP") or token.is_punct)
 
-                if _is_not_content(token):
+                if not is_content_word:
                     final_emb = torch.zeros(1, self.embedding_dim)
                 else:
                     contextual_emb = word_embeddings_map.get(token.text, torch.zeros(self.embedding_dim))
@@ -113,13 +224,19 @@ class DocumentGraphBuilder:
                         lemma_to_nodes[token.lemma_] = []
                     lemma_to_nodes[token.lemma_].append(word_node_id)
 
-                nx_graph.add_node(
-                    word_node_id, type='word', text=token.text, x=final_emb,
-                    contextual_x=contextual_emb.unsqueeze(0), position_in_sentence=token_idx_in_sent
-                )
-                word_nodes_in_sent.append(word_node_id)
+                potential_word_nodes.append({
+                    'id': word_node_id, 'type': 'word', 'text': token.text, 'x': final_emb,
+                    'contextual_x': contextual_emb.unsqueeze(0), 'position_in_sentence': token_idx_in_sent
+                })
 
-            if not contextual_embs_for_sent: continue
+            if len(contextual_embs_for_sent) == 0:
+                continue
+
+            word_nodes_in_sent = []
+            for node_data in potential_word_nodes:
+                node_id = node_data.pop('id')
+                nx_graph.add_node(node_id, **node_data)
+                word_nodes_in_sent.append(node_id)
 
             final_sent_emb = torch.mean(torch.stack(contextual_embs_for_sent), dim=0).unsqueeze(0)
             sent_node_id = f"sent_{doc_id}_{sent_idx}"
@@ -130,18 +247,15 @@ class DocumentGraphBuilder:
             processed_sentences.append({'id': sent_node_id, 'embedding': final_sent_emb})
 
         if not processed_sentences:
-            logging.warning(f"Document {doc_id} resulted in no processable sentences.")
+            logging.warning(f"Document '{filename}' resulted in no processable sentences. Creating empty graph.")
             nx_graph.add_node(doc_node_id, type='document', text=f"DOC_{doc_id}",
                               x=torch.zeros((1, self.embedding_dim)), filename=filename)
             return nx_graph, self.to_hetero_data(nx_graph)
 
         final_sentence_embeddings = torch.cat([s['embedding'] for s in processed_sentences])
         final_doc_embedding = torch.mean(final_sentence_embeddings, dim=0, keepdim=True)
-
-        # --- CHANGE: Added 'filename' attribute to the document node ---
         nx_graph.add_node(doc_node_id, type='document', text=f"DOC_{doc_id}", x=final_doc_embedding, filename=filename)
 
-        # ... (rest of the function is unchanged) ...
         for sent_data in processed_sentences:
             nx_graph.add_edge(sent_data['id'], doc_node_id, type='belongs')
 
@@ -181,33 +295,56 @@ class DocumentGraphBuilder:
                     nx_graph.add_edge(sentence_node_ids[i], sentence_node_ids[j], type='sim',
                                       feature=torch.tensor([sim]))
 
-        logging.info(f"Constructed graph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges.")
-        return nx_graph, self.to_hetero_data(nx_graph)
+        # --- NEW: Final validation and pruning step before returning ---
+        nx_graph = self._validate_and_prune_graph(nx_graph)
+        hetero_data = self.to_hetero_data(nx_graph)
 
-    # (to_hetero_data method is unchanged, it will automatically handle the new `filename` attribute)
+        logging.info(f"Final validated graph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges.")
+        return nx_graph, hetero_data
+
     def to_hetero_data(self, nx_graph: nx.MultiDiGraph) -> HeteroData:
-        # ... (code is unchanged)
+        """
+        Converts a NetworkX graph to a HeteroData object.
+        This version contains the fix for the indexing bug and a final
+        validation step that repairs any remaining edge inconsistencies.
+        """
+
         data = HeteroData()
+
         node_types = {d['type'] for _, d in nx_graph.nodes(data=True) if 'type' in d}
-        node_mappings = {
-            ntype: {n: i for i, (n, d) in enumerate(nx_graph.nodes(data=True)) if d.get('type') == ntype}
-            for ntype in node_types
-        }
+        node_mappings = {}
+        for ntype in node_types:
+            # First, get all nodes of the current type
+            nodes_of_type = [n for n, d in nx_graph.nodes(data=True) if d.get('type') == ntype]
+            # Then, enumerate that filtered list to create dense indices (0 to N-1)
+            node_mappings[ntype] = {node_id: i for i, node_id in enumerate(nodes_of_type)}
 
         for ntype, mapping in node_mappings.items():
             nodes_of_type = list(mapping.keys())
             if not nodes_of_type: continue
 
-            if 'x' in nx_graph.nodes[nodes_of_type[0]]:
-                data[ntype].x = torch.cat([nx_graph.nodes[n]['x'] for n in nodes_of_type], dim=0)
+            # This logic assumes all nodes of a type have the same set of attributes.
+            # Our new validation step helps ensure this is true.
+            node_attrs_names = list(nx_graph.nodes[nodes_of_type[0]].keys())
+            for attr_key in node_attrs_names:
+                if attr_key == 'type' or attr_key == 'contextual_x': continue  # Skip helper attributes
 
-            other_attrs = {k for k in nx_graph.nodes[nodes_of_type[0]].keys() if k not in ['type', 'x', 'contextual_x']}
-            for attr in other_attrs:
-                values = [nx_graph.nodes[n][attr] for n in nodes_of_type]
-                data[ntype][attr] = values
+                values = [nx_graph.nodes[n][attr_key] for n in nodes_of_type]
+
+                try:
+                    if isinstance(values[0], torch.Tensor):
+                        # Use cat for features like 'x'
+                        data[ntype][attr_key] = torch.cat(values, dim=0) if attr_key == 'x' else torch.tensor(values)
+                    else:
+                        data[ntype][attr_key] = values
+                except (TypeError, ValueError, RuntimeError):
+                    data[ntype][attr_key] = values
 
         for u, v, attrs in nx_graph.edges(data=True):
-            src_type, dst_type = nx_graph.nodes[u].get('type'), nx_graph.nodes[v].get('type')
+            src_type, dst_type = attrs.get('source_type'), attrs.get('target_type')
+            if not src_type: src_type = nx_graph.nodes[u].get('type')
+            if not dst_type: dst_type = nx_graph.nodes[v].get('type')
+
             if not src_type or not dst_type: continue
 
             edge_type = attrs['type']
@@ -222,20 +359,51 @@ class DocumentGraphBuilder:
             edge_index = torch.tensor([[src_idx], [dst_idx]], dtype=torch.long)
             data[edge_tuple].edge_index = torch.cat([data[edge_tuple].edge_index, edge_index], dim=1)
 
-            for attr_key, attr_val in attrs.items():
-                if attr_key == 'type': continue
-                if attr_key not in data[edge_tuple]: data[edge_tuple][attr_key] = []
-                data[edge_tuple][attr_key].append(attr_val)
+            if 'feature' in attrs:
+                if 'edge_attr' not in data[edge_tuple]: data[edge_tuple].edge_attr = []
+                data[edge_tuple].edge_attr.append(attrs['feature'])
 
         for store in data.edge_stores:
-            key = 'edge_attr'  # Our static features are all named 'feature'
-            if key in store:
-                value = store.pop('feature')
+            if 'edge_attr' in store:
                 try:
-                    store[key] = torch.stack(value, dim=0)
+                    # Stack all feature tensors for this edge type
+                    store.edge_attr = torch.stack(store.edge_attr, dim=0)
                 except (TypeError, ValueError, RuntimeError) as e:
-                    logging.warning(f"Could not convert edge attribute '{key}' to tensor: {e}")
-                    # Fallback for mixed-shape tensors (like one-hot vs scalars)
-                    if isinstance(value, list):
-                        store[key] = value
+                    logging.warning(f"Could not convert edge_attr for {store} to tensor: {e}")
+
+        # This will fix any invalid edges before the object is returned.
+        data = self._fix_and_validate_heterodata(data)
+
+        return data
+
+    def _fix_and_validate_heterodata(self, data: HeteroData) -> HeteroData:
+        """
+        Checks for and removes invalid edges from a HeteroData object.
+        An edge is invalid if its source or destination index is out of bounds.
+        """
+        for edge_type in data.edge_types:
+            edge_index = data[edge_type].edge_index
+            if edge_index.numel() == 0:
+                continue
+
+            src_node_type, _, dst_node_type = edge_type
+            num_src_nodes = data[src_node_type].num_nodes
+            num_dst_nodes = data[dst_node_type].num_nodes
+
+            # Create a boolean mask for valid edges
+            valid_mask = (edge_index[0] < num_src_nodes) & (edge_index[1] < num_dst_nodes)
+
+            num_original_edges = edge_index.size(1)
+            num_valid_edges = valid_mask.sum().item()
+
+            if num_valid_edges < num_original_edges:
+                logging.warning(
+                    f"Edge type '{edge_type}': Found and removed {num_original_edges - num_valid_edges} invalid edges "
+                    f"(pointing to non-existent nodes)."
+                )
+                # Filter the edge_index and any associated attributes
+                data[edge_type].edge_index = edge_index[:, valid_mask]
+                if 'edge_attr' in data[edge_type]:
+                    data[edge_type].edge_attr = data[edge_type].edge_attr[valid_mask]
+
         return data

@@ -26,7 +26,8 @@ from dataclasses import dataclass, field
 class DataConfig:
     # --- CHANGE: Define base path and subdirectory mapping ---
     # Assumes a common structure like the IMDB dataset
-    BASE_DATA_PATH: str = "data/datasets/IMDB"
+    DATASET_NAME:str="IMDB"
+    BASE_DATA_PATH: str =f"data/datasets/{DATASET_NAME}"
 
     # Use field(default_factory=...) for mutable defaults like dicts
     CLASS_SUBDIRECTORIES: dict = field(default_factory=lambda: {
@@ -35,12 +36,17 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 200
+    SAMPLES_PER_CLASS: int = 20
 
     SPACY_MODEL: str = 'en_core_web_lg'
     EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'
     SIMILARITY_THRESHOLD: float = 0.85
 
+
+@dataclass
+class VisualizationConfig:
+
+    VISUALIZATION_FOLDER = "data/graph_visualizations"
 
 # Dependency labels are a core part of the graph definition
 COMMON_DEP_LABELS = [

@@ -1,5 +1,7 @@
 # main.py
 import logging
+import os
+from datetime import datetime
 import random
 from pathlib import Path  # Use pathlib for robust path handling
 
@@ -8,13 +10,34 @@ import tqdm
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 
+
 # Local imports from our new modules
-from config import ModelConfig, TrainingConfig, DataConfig
-from data_preprocessing import preprocess_text
-from engine import train, test
-from graph_builder import DocumentGraphBuilder
-from model import ExplainableHierarchicalGNN
-from visualization import visualize_interactive_graph
+from src.multi_graph.config import ModelConfig, TrainingConfig, DataConfig
+from src.multi_graph.data_preprocessing import preprocess_text
+from src.multi_graph.engine import train, test
+from src.multi_graph.graph_builder import DocumentGraphBuilder
+from src.multi_graph.model import ExplainableHierarchicalGNN
+from src.multi_graph.config import VisualizationConfig
+from src.multi_graph.visualization import visualize_interactive_graph
+
+# Create logs directory if it doesn't exist
+os.makedirs("logs", exist_ok=True)
+# Generate timestamp
+timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
+log_filename = f"logs/multi-level-graph_{timestamp}.log"
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_filename),
+        logging.StreamHandler()  # Optional: also log to console
+    ]
+)
+
+# Example usage
+logging.info("Logging setup complete.")
 
 
 def load_documents_from_disk(base_path_str: str, class_map: dict, samples_per_class: int) -> dict:
@@ -62,6 +85,7 @@ def run():
     model_cfg = ModelConfig()
     train_cfg = TrainingConfig()
     data_cfg = DataConfig()
+    viz_cfg = VisualizationConfig()
 
     # --- 2. Load and Preprocess Data From Disk ---
     raw_docs_by_class = load_documents_from_disk(
@@ -88,19 +112,43 @@ def run():
         similarity_threshold=data_cfg.SIMILARITY_THRESHOLD
     )
 
+    # --- CHANGE: Create a dedicated directory for visualization outputs ---
+    output_viz_dir = Path(viz_cfg.VISUALIZATION_FOLDER) / data_cfg.DATASET_NAME
+    output_viz_dir.mkdir(exist_ok=True)
+    logging.info(f"Interactive graph visualizations will be saved to '{output_viz_dir}/'")
+
+    # This is the section you provided, now updated
     graphs, labels, filenames = [], [], []
     for class_idx, (class_name, docs) in enumerate(docs_by_class.items()):
         print(f"\n--- Building Graphs for Class: {class_name} ---")
-        contents = [content for _, content in docs]
-        current_filenames = [filename for filename, _ in docs]
 
-        _, hetero_graphs = builder.process_documents(docs)
+        # process_documents now handles validation internally
+        nx_graphs_for_class, hetero_graphs_for_class = builder.process_documents(docs)
 
-        graphs.extend(hetero_graphs)
-        labels.extend([class_idx] * len(hetero_graphs))
-        filenames.extend(current_filenames)
+        # --- Loop through the generated graphs and create a visualization for each ---
+        # We zip the nx_graphs with the original 'docs' list to match each graph with its filename.
+        for nx_graph, (original_filename, _) in zip(nx_graphs_for_class, docs):
+            # Create a clean output filename (e.g., "123_4.html") from the original ("123_4.txt")
+            output_html_name = f"{class_name.capitalize()}_{Path(original_filename).stem}.html"
+            output_path = output_viz_dir / output_html_name
 
-    # --- CHANGE: Assign the actual filename as the doc_id ---
+            # Call the visualization function to save the HTML file
+            visualize_interactive_graph(
+                nx_graph,
+                dep_label_map=builder.dep_label_map,
+                output_filename=str(output_path)  # pyvis expects a string path
+            )
+
+        # All graphs returned are guaranteed to be valid
+        graphs.extend(hetero_graphs_for_class)
+        labels.extend([class_idx] * len(hetero_graphs_for_class))
+        filenames.extend([filename for filename, _ in docs])
+
+        # We need the filenames for the graphs that were actually kept
+        valid_filenames = [g.graph['filename'] for g in nx_graphs_for_class]
+        filenames.extend(valid_filenames)
+
+    # --- Assign the actual filename as the doc_id ---
     for i, graph in enumerate(graphs):
         graph['document'].y = torch.tensor([labels[i]])
         graph['document'].doc_id = [filenames[i]]

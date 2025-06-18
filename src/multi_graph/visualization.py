@@ -31,12 +31,14 @@ def visualize_explanatory_graph(nx_graph: nx.MultiDiGraph):
     nodes_by_type = {'document': [], 'sentence': [], 'word': []}
     sent_to_words = {}
     for node, data in nx_graph.nodes(data=True):
-        nodes_by_type[data['type']].append(node)
-        if data['type'] == 'sentence':
+        node_type = data.get('type', 'unknown')
+        nodes_by_type[node_type].append(node)
+        if node_type == 'sentence':
             sent_to_words[node] = []
     for u, v, data in nx_graph.edges(data=True):
-        if data.get('type') == 'belongs' and nx_graph.nodes[u]['type'] == 'word':
+        if data.get('type') == 'belongs' and nx_graph.nodes[u].get('type') == 'word' and v in sent_to_words:
             sent_to_words[v].append(u)
+
     y_coords = {'document': 1.0, 'sentence': 0.0, 'word': -1.0}
     pos[nodes_by_type['document'][0]] = (0.5, y_coords['document'])
     sorted_sents = sorted(nodes_by_type['sentence'], key=lambda n: nx_graph.nodes[n]['sentence_index'])
@@ -93,7 +95,7 @@ def visualize_explanatory_graph(nx_graph: nx.MultiDiGraph):
     nx.draw_networkx_labels(nx_graph, pos, labels=labels, font_size=9, font_weight='bold', font_color='white', ax=ax)
 
     for u, v, data in nx_graph.edges(data=True):
-        edge_type = data['type']
+        edge_type = data.get("type", "unknown_edge")
         edge_color = edge_color_map.get(edge_type, '#b7b7a4')
 
         # --- CHANGE: Updated edge style logic ---
@@ -160,8 +162,13 @@ def visualize_interactive_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict,
 
     # Add nodes and assign them to a 'group' for filtering
     for node, data in nx_graph.nodes(data=True):
-        node_type, label = data['type'], data['text']
+        node_type = data.get('type', 'unknown')
+        label = data.get('text', 'N/A')
         group = node_type
+
+        if node_type == "unknown" or label == "N/A":
+            print(f"Unknown node type: Type: {node_type}, Label: {label}\n\tNode: {node}, Data: {data}")
+
         if node_type == 'sentence':
             sent_idx = data.get('sentence_index', 'N/A')
             label = f"SENT_{sent_idx}"
