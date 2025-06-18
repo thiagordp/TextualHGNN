@@ -15,7 +15,7 @@ class ModelConfig:
 class TrainingConfig:
     BATCH_SIZE: int = 1
     LEARNING_RATE: float = 0.001
-    EPOCHS: int = 50
+    EPOCHS: int = 100
     PATIENCE: int = 10
 
 
@@ -36,7 +36,7 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 20
+    SAMPLES_PER_CLASS: int = 10000
 
     SPACY_MODEL: str = 'en_core_web_lg'
     EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'

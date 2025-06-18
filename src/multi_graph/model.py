@@ -83,10 +83,12 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
         }
 
         word_x_refined_dict = self.word_hetero_conv(x_dict, edge_index_dict)
-        word_x_refined = F.leaky_relu(word_x_refined_dict['word'])
+        if 'word' in word_x_refined_dict:
+            word_x_refined = F.leaky_relu(word_x_refined_dict['word'])
+        else:
+            # If no word-word edges existed, pass the features through
+            word_x_refined = x_dict['word']
 
-        # 2. First Hierarchical Aggregation (Word -> Sentence)
-        # Both child_x and parent_x now have the same dimension (hidden_channels)
         sent_x_aggregated, word_attentions = self.word_to_sent_attention(
             child_x=word_x_refined,
             parent_x=x_dict['sentence'],
@@ -94,12 +96,19 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
         )
         sent_x_aggregated = self.norm1(sent_x_aggregated + x_dict['sentence'])
 
-        # 3. Sentence-Level Refinement
-        temp_x_dict = {'sentence': sent_x_aggregated, 'word': x_dict['word']}
+        # --- CHANGE: Make sentence-level convolution robust ---
+        # Note: 'word' features are needed if there are edges from words to sentences in the conv
+        # In our case, sent_hetero_conv only has sentence-sentence edges, but this is safer.
+        temp_x_dict = {'sentence': sent_x_aggregated, 'word': word_x_refined}
         sent_x_refined_dict = self.sent_hetero_conv(temp_x_dict, edge_index_dict)
-        sent_x_refined = F.leaky_relu(sent_x_refined_dict['sentence'])
 
-        # 4. Final Hierarchical Aggregation (Sentence -> Document)
+        if 'sentence' in sent_x_refined_dict:
+            # If message passing happened (e.g., for multi-sentence docs)
+            sent_x_refined = F.leaky_relu(sent_x_refined_dict['sentence'])
+        else:
+            # Otherwise (e.g., for a single-sentence doc), pass the features through
+            sent_x_refined = sent_x_aggregated
+
         doc_x_final, sent_attentions = self.sent_to_doc_attention(
             child_x=sent_x_refined,
             parent_x=x_dict['document'],

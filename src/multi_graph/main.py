@@ -126,18 +126,18 @@ def run():
         nx_graphs_for_class, hetero_graphs_for_class = builder.process_documents(docs)
 
         # --- Loop through the generated graphs and create a visualization for each ---
-        # We zip the nx_graphs with the original 'docs' list to match each graph with its filename.
-        for nx_graph, (original_filename, _) in zip(nx_graphs_for_class, docs):
-            # Create a clean output filename (e.g., "123_4.html") from the original ("123_4.txt")
-            output_html_name = f"{class_name.capitalize()}_{Path(original_filename).stem}.html"
-            output_path = output_viz_dir / output_html_name
-
-            # Call the visualization function to save the HTML file
-            visualize_interactive_graph(
-                nx_graph,
-                dep_label_map=builder.dep_label_map,
-                output_filename=str(output_path)  # pyvis expects a string path
-            )
+        # # We zip the nx_graphs with the original 'docs' list to match each graph with its filename.
+        # for nx_graph, (original_filename, _) in zip(nx_graphs_for_class, docs):
+        #     # Create a clean output filename (e.g., "123_4.html") from the original ("123_4.txt")
+        #     output_html_name = f"{class_name.capitalize()}_{Path(original_filename).stem}.html"
+        #     output_path = output_viz_dir / output_html_name
+        #
+        #     # Call the visualization function to save the HTML file
+        #     visualize_interactive_graph(
+        #         nx_graph,
+        #         dep_label_map=builder.dep_label_map,
+        #         output_filename=str(output_path)  # pyvis expects a string path
+        #     )
 
         # All graphs returned are guaranteed to be valid
         graphs.extend(hetero_graphs_for_class)
