@@ -9,7 +9,7 @@ from torch_geometric.data import HeteroData
 
 
 class HierarchicalSignedAttention(torch.nn.Module):
-    # ... (code is unchanged from the version we designed)
+
     def __init__(self, channels: int):
         super().__init__()
         self.attention_net = Linear(2 * channels, 1)
@@ -36,10 +36,19 @@ class HierarchicalSignedAttention(torch.nn.Module):
 
 class ExplainableHierarchicalGNN(torch.nn.Module):
     # ... (code is unchanged from the version we designed)
-    def __init__(self, hidden_channels: int, out_channels: int):
+    def __init__(self, initial_channels: int, hidden_channels: int, out_channels: int):
         super().__init__()
-        self.word_conv = SAGEConv((-1, -1), hidden_channels)
-        self.sent_conv = SAGEConv((-1, -1), hidden_channels)
+
+        # --- Initial projection layers to map all features to the same hidden_channels ---
+        self.word_lin = Linear(initial_channels, hidden_channels)
+        self.sent_lin = Linear(initial_channels, hidden_channels)
+        self.doc_lin = Linear(initial_channels, hidden_channels)
+
+        # --- Convolutions now operate on the consistent hidden_channels size ---
+        self.word_conv = SAGEConv(hidden_channels, hidden_channels)
+        self.sent_conv = SAGEConv(hidden_channels, hidden_channels)
+
+        # HeteroConv wrappers
         self.word_hetero_conv = HeteroConv({
             ('word', 'dep', 'word'): self.word_conv,
             ('word', 'seq', 'word'): self.word_conv,
@@ -49,8 +58,12 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
             ('sentence', 'seq', 'sentence'): self.sent_conv,
             ('sentence', 'sim', 'sentence'): self.sent_conv
         }, aggr='sum')
+
+        # Hierarchical attention modules now correctly receive hidden_channels
         self.word_to_sent_attention = HierarchicalSignedAttention(hidden_channels)
         self.sent_to_doc_attention = HierarchicalSignedAttention(hidden_channels)
+
+        # Post-aggregation layers
         self.norm1 = LayerNorm(hidden_channels)
         self.norm2 = LayerNorm(hidden_channels)
         self.classifier = Linear(hidden_channels, out_channels)
@@ -62,9 +75,18 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
         # For a model that uses edge_attr, a custom wrapper or different conv layer is needed.
         # For simplicity, we are omitting edge_attr usage here, but a real implementation
         # would use a layer like GINEConv or write a custom message passing function.
-        word_x_refined = self.word_hetero_conv(x_dict, edge_index_dict)
-        word_x_refined = F.leaky_relu(word_x_refined['word'])
 
+        x_dict = {
+            'word': F.leaky_relu(self.word_lin(x_dict['word'])),
+            'sentence': F.leaky_relu(self.sent_lin(x_dict['sentence'])),
+            'document': F.leaky_relu(self.doc_lin(x_dict['document'])),
+        }
+
+        word_x_refined_dict = self.word_hetero_conv(x_dict, edge_index_dict)
+        word_x_refined = F.leaky_relu(word_x_refined_dict['word'])
+
+        # 2. First Hierarchical Aggregation (Word -> Sentence)
+        # Both child_x and parent_x now have the same dimension (hidden_channels)
         sent_x_aggregated, word_attentions = self.word_to_sent_attention(
             child_x=word_x_refined,
             parent_x=x_dict['sentence'],
@@ -72,10 +94,12 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
         )
         sent_x_aggregated = self.norm1(sent_x_aggregated + x_dict['sentence'])
 
-        temp_x_dict = {'sentence': sent_x_aggregated}
-        sent_x_refined = self.sent_hetero_conv(temp_x_dict, edge_index_dict)
-        sent_x_refined = F.leaky_relu(sent_x_refined['sentence'])
+        # 3. Sentence-Level Refinement
+        temp_x_dict = {'sentence': sent_x_aggregated, 'word': x_dict['word']}
+        sent_x_refined_dict = self.sent_hetero_conv(temp_x_dict, edge_index_dict)
+        sent_x_refined = F.leaky_relu(sent_x_refined_dict['sentence'])
 
+        # 4. Final Hierarchical Aggregation (Sentence -> Document)
         doc_x_final, sent_attentions = self.sent_to_doc_attention(
             child_x=sent_x_refined,
             parent_x=x_dict['document'],
@@ -83,4 +107,5 @@ class ExplainableHierarchicalGNN(torch.nn.Module):
         )
         doc_x_final = self.norm2(doc_x_final + x_dict['document'])
         out = self.classifier(doc_x_final)
+
         return out, (word_attentions, sent_attentions)

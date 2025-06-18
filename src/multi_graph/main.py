@@ -150,8 +150,8 @@ def run():
 
     # --- Assign the actual filename as the doc_id ---
     for i, graph in enumerate(graphs):
-        graph['document'].y = torch.tensor([labels[i]])
-        graph['document'].doc_id = [filenames[i]]
+        graph['document'].y = torch.tensor(labels[i])  # The label should be a scalar tensor
+        graph['document'].doc_id = filenames[i]  # The ID should be a string
 
     # --- 4. Create Datasets and DataLoaders ---
     train_graphs, test_graphs = train_test_split(graphs, test_size=0.4, random_state=42, stratify=labels)
@@ -165,7 +165,8 @@ def run():
 
     # --- 5. Initialize Model and Training Components ---
     model = ExplainableHierarchicalGNN(
-        hidden_channels=model_cfg.HIDDEN_CHANNELS,
+        initial_channels=builder.embedding_dim,  # e.g., 384
+        hidden_channels=model_cfg.HIDDEN_CHANNELS,  # e.g., 64
         out_channels=model_cfg.OUT_CHANNELS
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.LEARNING_RATE)
