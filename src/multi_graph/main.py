@@ -127,7 +127,10 @@ def run():
 
         # --- Loop through the generated graphs and create a visualization for each ---
         # We zip the nx_graphs with the original 'docs' list to match each graph with its filename.
-        for nx_graph, (original_filename, _) in zip(nx_graphs_for_class, docs):
+
+        for nx_graph, (original_filename, _) in tqdm.tqdm(zip(nx_graphs_for_class, docs),
+                                                     total=len(docs),
+                                                     desc="Creating graph visualizations"):
             # Create a clean output filename (e.g., "123_4.html") from the original ("123_4.txt")
             output_html_name = f"{class_name.capitalize()}_{Path(original_filename).stem}.html"
             output_path = output_viz_dir / output_html_name
@@ -194,12 +197,15 @@ def run():
         else:
             patience_counter += 1
 
-        if epoch % 5 == 0:
-            print(
-                f"Epoch {epoch:02d}, Loss: {loss:.4f}, Val Acc: {val_metrics['accuracy']:.4f}, Val F1: {val_metrics['f1']:.4f}")
+        logging.info(f"Epoch {epoch:02d}, "
+              f"Loss: {loss:.4f}, "
+              f"Val Acc:  {val_metrics['accuracy']:.4f}, "
+              f"Val Prec: {val_metrics['precision']:.4f}, "
+              f"Val Rec:  {val_metrics['recall']:.4f}, "
+              f"Val F1:   {val_metrics['f1']:.4f}")
 
         if patience_counter >= train_cfg.PATIENCE:
-            print(f"Early stopping at epoch {epoch}.")
+            logging.info(f"Early stopping at epoch {epoch}.")
             break
 
     # --- 7. Final Evaluation and Explainability ---

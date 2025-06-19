@@ -13,7 +13,7 @@ def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, o
     Creates an interactive visualization of the initial graph structure,
     styling edges based on their pre-computed static features.
     """
-    logging.info(f"Creating structural graph visualization, saving to {output_filename}...")
+    # logging.info(f"Creating structural graph visualization, saving to {output_filename}...")
 
     net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white", cdn_resources='remote')
 
@@ -64,7 +64,7 @@ def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, o
     net.toggle_physics(True)
     net.show_buttons(filter_=['nodes', 'edges'])
     net.save_graph(output_filename)
-    logging.info(f"Successfully saved structural graph to {output_filename}.")
+    # logging.info(f"Successfully saved structural graph to {output_filename}.")
 
 
 def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, dep_label_map: dict,

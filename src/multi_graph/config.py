@@ -16,7 +16,7 @@ class TrainingConfig:
     BATCH_SIZE: int = 1
     LEARNING_RATE: float = 0.001
     EPOCHS: int = 100
-    PATIENCE: int = 10
+    PATIENCE: int = 5
 
 
 from dataclasses import dataclass, field

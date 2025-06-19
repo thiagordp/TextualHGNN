@@ -79,7 +79,7 @@ class DocumentGraphBuilder:
         progress_bar = tqdm(enumerate(documents), total=len(documents), desc="Building graphs")
 
         for i, (filename, doc_text) in progress_bar:
-            progress_bar.set_postfix_str(f"File: {filename}", refresh=True)
+            progress_bar.set_postfix_str(f"File: {filename.rjust(7)}", refresh=True)
             nx_graph, hetero_graph = self.build_graphs_for_document(doc_text, filename, doc_id=i)
             if hetero_graph.node_types:
                 valid_nx_graphs.append(nx_graph)
