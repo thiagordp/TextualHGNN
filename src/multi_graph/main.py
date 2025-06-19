@@ -214,27 +214,39 @@ def run():
     # Pass test_graphs to align explanations with the correct original data
     test_metrics, true_labels, pred_labels, final_explanations = test(model, test_loader, test_graphs)
     logging.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}, F1-Score: {test_metrics['f1']:.4f}")
-    print("Final explanations:", final_explanations)
 
     if final_explanations:
+        logging.info(f"\n--- Generating {len(final_explanations)} Explainability Visualizations ---")
         output_viz_dir = Path(viz_cfg.VISUALIZATION_FOLDER) / data_cfg.DATASET_NAME
         output_viz_dir.mkdir(parents=True, exist_ok=True)
 
-        # This map now uses the correctly created test_nx_graphs list
+        # Create the map from filename to its original nx_graph object once
         nx_graph_map_for_viz = {g.graph['filename']: g for g in test_nx_graphs}
 
-        explanation_to_viz = final_explanations[0]
-        doc_filename = explanation_to_viz['doc_id']
-        original_nx_graph = nx_graph_map_for_viz.get(doc_filename)
+        # Use tqdm for a progress bar
+        for explanation in tqdm.tqdm(final_explanations, desc="Generating Explainability Visualizations"):
+            doc_filename = explanation['doc_id']
+            original_nx_graph = nx_graph_map_for_viz.get(doc_filename)
 
-        if original_nx_graph:
-            logging.info(f"--- Explainability Analysis for Doc: {doc_filename} ---")
-            logging.info(
-                f"Predicted: '{class_names[explanation_to_viz['prediction']]}', Actual: '{class_names[explanation_to_viz['actual']]}'")
+            if original_nx_graph:
+                # Log the prediction details for the current file
+                # logging.info(f"Analyzing Doc: {doc_filename} | "
+                #              f"Predicted: '{class_names[explanation['prediction']]}' | "
+                #              f"Actual: '{class_names[explanation['actual']]}'")
 
-            output_html_path = output_viz_dir / f"{Path(doc_filename).stem}_learned_attention.html"
-            visualize_learned_attentions(original_nx_graph, explanation_to_viz, builder.dep_label_map,
-                                         str(output_html_path))
+                output_html_path = output_viz_dir / f"{Path(doc_filename).stem}_learned_attention.html"
+
+                # Call the visualization function for the current explanation
+                visualize_learned_attentions(
+                    nx_graph=original_nx_graph,
+                    explanation=explanation,
+                    dep_label_map=builder.dep_label_map,
+                    output_filename=str(output_html_path)
+                )
+            else:
+                logging.warning(f"Could not find original NetworkX graph for doc_id: {doc_filename} to visualize.")
+    else:
+        logging.warning("No explanations were generated, skipping visualization.")
 
 
 if __name__ == '__main__':

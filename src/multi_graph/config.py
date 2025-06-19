@@ -36,7 +36,7 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 50
+    SAMPLES_PER_CLASS: int = 2000
 
     SPACY_MODEL: str = 'en_core_web_lg'
     EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'

@@ -73,15 +73,15 @@ def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, d
     Injects learned attention weights into a NetworkX graph and creates an
     interactive visualization, styling edges based on attention.
     """
-    logging.info(f"Creating learned attention visualization for {explanation['doc_id']}...")
+    # logging.info(f"Creating learned attention visualization for {explanation['doc_id']}...")
 
     # 1. Create a copy to avoid modifying the original graph object
     enriched_graph = nx_graph.copy()
 
     # 2. Create Mappings to look up attention weights
 
-    print(f"Keys inside explanation: {explanation.keys()}")
-    print(f"Keys inside explanation['graph_data']: {explanation['graph_data'].keys()}")
+    # print(f"Keys inside explanation: {explanation.keys()}")
+    # print(f"Keys inside explanation['graph_data']: {explanation['graph_data'].keys()}")
 
     node_mappings = explanation['node_mappings']
 
@@ -152,4 +152,4 @@ def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, d
     net.toggle_physics(True)
     net.show_buttons(filter_=['nodes', 'edges'])
     net.save_graph(output_filename)
-    logging.info(f"Successfully saved learned attention graph to {output_filename}.")
+    # logging.info(f"Successfully saved learned attention graph to {output_filename}.")
