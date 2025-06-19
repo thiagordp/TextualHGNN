@@ -7,6 +7,7 @@ import numpy as np
 import logging
 
 from torch_geometric.data import HeteroData
+from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 from torch.nn.functional import cosine_similarity, one_hot
 
@@ -75,8 +76,12 @@ class DocumentGraphBuilder:
         valid_nx_graphs = []
         valid_hetero_graphs = []
 
-        for i, (filename, doc_text) in enumerate(documents):
-            logging.info(f"--- Processing Document {i + 1}/{len(documents)} ({filename}) ---")
+        # --- Wrap the iterator with tqdm for a progress bar ---
+        progress_bar = tqdm(enumerate(documents), total=len(documents), desc="Building graphs")
+
+        for i, (filename, doc_text) in progress_bar:
+            # --- Update postfix instead of logging for each file ---
+            progress_bar.set_postfix_str(f"Current file: {filename}", refresh=True)
 
             # 1. Build the graph for one document
             nx_graph, hetero_graph = self.build_graphs_for_document(doc_text, filename, doc_id=i)
@@ -151,31 +156,31 @@ class DocumentGraphBuilder:
 
         # If we found invalid nodes, log detailed context before removing them
         if nodes_to_remove:
-            logging.warning(f"Found {len(nodes_to_remove)} invalid node(s) to be pruned. Logging details:")
-
-            for node_id in nodes_to_remove:
-                node_data = nx_graph.nodes[node_id]
-                log_message = [f"  - Pruning Node ID: '{node_id}'"]
-                log_message.append(f"    - Attributes: {node_data}")
-
-                # Log incoming connections (predecessors)
-                in_edges = list(nx_graph.in_edges(node_id, data=True))
-                if in_edges:
-                    log_message.append(f"    - Connected FROM ({len(in_edges)} edge(s)):")
-                    for u, _, edge_data in in_edges:
-                        log_message.append(
-                            f"      - Node '{u}' (type: {nx_graph.nodes[u].get('type', 'N/A')}) via edge: {edge_data}")
-
-                # Log outgoing connections (successors)
-                out_edges = list(nx_graph.out_edges(node_id, data=True))
-                if out_edges:
-                    log_message.append(f"    - Connected TO ({len(out_edges)} edge(s)):")
-                    for _, v, edge_data in out_edges:
-                        log_message.append(
-                            f"      - Node '{v}' (type: {nx_graph.nodes[v].get('type', 'N/A')}) via edge: {edge_data}")
-
-                # Print the detailed multi-line log message for the node
-                logging.warning("\n".join(log_message))
+            # logging.warning(f"Found {len(nodes_to_remove)} invalid node(s) to be pruned. Logging details:")
+            #
+            # for node_id in nodes_to_remove:
+            #     node_data = nx_graph.nodes[node_id]
+            #     log_message = [f"  - Pruning Node ID: '{node_id}'"]
+            #     log_message.append(f"    - Attributes: {node_data}")
+            #
+            #     # Log incoming connections (predecessors)
+            #     in_edges = list(nx_graph.in_edges(node_id, data=True))
+            #     if in_edges:
+            #         log_message.append(f"    - Connected FROM ({len(in_edges)} edge(s)):")
+            #         for u, _, edge_data in in_edges:
+            #             log_message.append(
+            #                 f"      - Node '{u}' (type: {nx_graph.nodes[u].get('type', 'N/A')}) via edge: {edge_data}")
+            #
+            #     # Log outgoing connections (successors)
+            #     out_edges = list(nx_graph.out_edges(node_id, data=True))
+            #     if out_edges:
+            #         log_message.append(f"    - Connected TO ({len(out_edges)} edge(s)):")
+            #         for _, v, edge_data in out_edges:
+            #             log_message.append(
+            #                 f"      - Node '{v}' (type: {nx_graph.nodes[v].get('type', 'N/A')}) via edge: {edge_data}")
+            #
+            #     # Print the detailed multi-line log message for the node
+            #     logging.warning("\n".join(log_message))
 
             # Finally, remove the nodes from the graph
             nx_graph.remove_nodes_from(nodes_to_remove)
@@ -299,7 +304,7 @@ class DocumentGraphBuilder:
         nx_graph = self._validate_and_prune_graph(nx_graph)
         hetero_data = self.to_hetero_data(nx_graph)
 
-        logging.info(f"Final validated graph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges.")
+        #logging.info(f"Final validated graph: {nx_graph.number_of_nodes()} nodes, {nx_graph.number_of_edges()} edges.")
         return nx_graph, hetero_data
 
     def to_hetero_data(self, nx_graph: nx.MultiDiGraph) -> HeteroData:
