@@ -30,7 +30,7 @@ def preprocess_text(text: str) -> str:
             "®": " registered ", "™": " trademark ", "°": " degrees ",
             "½": " half ", "¼": " quarter ", "¾": " three quarters ",
             "–": "-", "—": "-", "‘": "'", "’": "'", "“": "\"", "”": "\"",
-            "´": "'", "`": "'", "¨": "\"", "…": "...", "€": " euro ",
+            "´": "'", "`": "'", "¨": "\"", "…": "...", "...": "... ", "€": " euro ",
             "£": " pound ", "$": " dollar "
         }
         for old, new in replacements.items():

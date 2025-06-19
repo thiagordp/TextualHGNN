@@ -1,219 +1,155 @@
 # visualization.py
 
 import logging
-
-import networkx as nx
-import numpy as np
 import torch
+import networkx as nx
+import matplotlib.colors as mcolors
 from pyvis.network import Network
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from torch_geometric.data import HeteroData
 
 
-def visualize_explanatory_graph(nx_graph: nx.MultiDiGraph):
+def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, output_filename: str):
     """
-    Draws a high-quality, explanatory graph.
-    UPDATED: Visualizes static edge features instead of pre-computed attention.
+    Creates an interactive visualization of the initial graph structure,
+    styling edges based on their pre-computed static features.
     """
-    fig, ax = plt.subplots(figsize=(70, 30))
-    pos = {}
+    logging.info(f"Creating structural graph visualization, saving to {output_filename}...")
 
-    # --- 1. Define Color and Style Maps (No Change) ---
-    node_color_map = {'document': '#d62828', 'sentence': '#003049', 'word': '#f77f00'}
-    edge_color_map = {
-        'belongs': '#2a9d8f', 'seq': '#e76f51', 'dep': '#8d99ae',
-        'same_lemma': '#6a4c93', 'sim': '#118ab2'
-    }
+    net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white", cdn_resources='remote')
 
-    # --- 2-3. Positioning Logic (No Change) ---
-    # (The existing logic for node positioning remains effective)
-    nodes_by_type = {'document': [], 'sentence': [], 'word': []}
-    sent_to_words = {}
-    for node, data in nx_graph.nodes(data=True):
-        node_type = data.get('type', 'unknown')
-        nodes_by_type[node_type].append(node)
-        if node_type == 'sentence':
-            sent_to_words[node] = []
-    for u, v, data in nx_graph.edges(data=True):
-        if data.get('type') == 'belongs' and nx_graph.nodes[u].get('type') == 'word' and v in sent_to_words:
-            sent_to_words[v].append(u)
-
-    y_coords = {'document': 1.0, 'sentence': 0.0, 'word': -1.0}
-    pos[nodes_by_type['document'][0]] = (0.5, y_coords['document'])
-    sorted_sents = sorted(nodes_by_type['sentence'], key=lambda n: nx_graph.nodes[n]['sentence_index'])
-    num_sentences = len(sorted_sents)
-    total_plot_width = 0.9
-    left_margin = (1 - total_plot_width) / 2
-    if num_sentences > 1:
-        group_space_ratio = 0.9
-        total_group_width = total_plot_width * group_space_ratio
-        total_gap_width = total_plot_width * (1 - group_space_ratio)
-        single_group_width = total_group_width / num_sentences
-        single_gap_width = total_gap_width / (num_sentences - 1)
-    else:
-        single_group_width = total_plot_width
-        single_gap_width = 0
-    current_x = left_margin
-    for sent_node in sorted_sents:
-        x_start = current_x
-        x_end = x_start + single_group_width
-        sent_x = (x_start + x_end) / 2
-        pos[sent_node] = (sent_x, y_coords['sentence'])
-        words_in_sent = sorted(sent_to_words[sent_node], key=lambda n: nx_graph.nodes[n]['position_in_doc'])
-        num_words = len(words_in_sent)
-        padding = 0.1 * single_group_width
-        word_x_coords = np.linspace(x_start + padding, x_end - padding, num_words) if num_words > 1 else [sent_x]
-        y_base = y_coords['word']
-        y_stagger_offset = 0.2
-        for j, word_node in enumerate(words_in_sent):
-            y_pos = y_base if j % 2 == 0 else y_base - y_stagger_offset
-            pos[word_node] = (word_x_coords[j], y_pos)
-        rect = Rectangle((x_start, y_coords['word'] - y_stagger_offset - 0.1),
-                         width=single_group_width, height=0.4 + y_stagger_offset,
-                         facecolor='#f8f9fa', edgecolor='#ced4da', linestyle='--', alpha=0.6, zorder=0)
-        ax.add_patch(rect)
-        current_x = x_end + single_gap_width
-
-    # --- 4. Labels and Sizes (No Change) ---
-    labels, node_colors, node_sizes = {}, [], []
-    for node, data in nx_graph.nodes(data=True):
-        node_colors.append(node_color_map[data['type']])
-        text_label = data['text']
-        if data['type'] == 'word':
-            labels[node] = text_label
-            node_sizes.append(1000 + len(text_label) * 250)
-        elif data['type'] == 'sentence':
-            labels[node] = f"SENT_{data['sentence_index']}"
-            node_sizes.append(5000)
-        else:
-            labels[node] = text_label
-            node_sizes.append(6000)
-
-    # --- 5. Draw Graph Elements (UPDATED LOGIC) ---
-    nx.draw_networkx_nodes(nx_graph, pos, node_color=node_colors, node_size=node_sizes, alpha=1.0, ax=ax)
-    nx.draw_networkx_labels(nx_graph, pos, labels=labels, font_size=9, font_weight='bold', font_color='white', ax=ax)
-
-    for u, v, data in nx_graph.edges(data=True):
-        edge_type = data.get("type", "unknown_edge")
-        edge_color = edge_color_map.get(edge_type, '#b7b7a4')
-
-        # --- CHANGE: Updated edge style logic ---
-        # 'belongs' edges are now fixed style, as their weight is learned.
-        if edge_type == 'belongs':
-            alpha = 0.9
-            lw = 2.5
-        # For other edges, use the static feature to determine style.
-        else:
-            alpha = 0.7
-            # Use the scalar feature for line width if it exists
-            feature_val = data.get('feature', torch.tensor([1.0])).item()
-            lw = 1.0 + (feature_val * 3.0)  # Scale feature (0-1) to a visible width
-
-        rad = 0.15
-        if hash(u) > hash(v): rad = -rad
-        if nx_graph.nodes[u]['type'] == nx_graph.nodes[v]['type']: rad = 0.2
-
-        ax.annotate("", xy=pos[v], xycoords='data', xytext=pos[u], textcoords='data',
-                    arrowprops=dict(arrowstyle="->", color=edge_color, alpha=alpha, lw=lw,
-                                    shrinkA=35, shrinkB=35, patchA=None, patchB=None,
-                                    connectionstyle=f"arc3,rad={rad}"))
-
-    # --- 6. Create Legend (UPDATED LOGIC) ---
-    legend_handles = []
-    for node_type, color in node_color_map.items():
-        legend_handles.append(Line2D([0], [0], marker='o', color='w', label=f'Node: {node_type.capitalize()}',
-                                     markersize=15, markerfacecolor=color))
-    for edge_type, color in edge_color_map.items():
-        # --- CHANGE: Removed mention of attention ---
-        label = f'Edge: {edge_type.capitalize()}'
-        if edge_type in ['sim', 'same_lemma']: label += ' (Width = Feature)'
-        legend_handles.append(Line2D([0], [0], color=color, lw=4, label=label))
-
-    ax.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, -0.02),
-              fancybox=True, shadow=True, ncol=4, fontsize=14)
-    ax.set_title(f"Explanatory Graph Structure (Doc ID: {nx_graph.graph.get('doc_id', 'N/A')})", size=28, pad=20)
-    plt.subplots_adjust(bottom=0.1, top=0.95)
-    plt.axis('off')
-    plt.show()
-
-# (visualize_interactive_graph code is unchanged from the last correct version)
-
-def visualize_interactive_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict,
-                                output_filename: str = "interactive_graph.html"):
-    """
-    Creates a beautiful, interactive, physics-based graph visualization.
-
-    FINAL ROBUST VERSION:
-    - Uses direct pyvis methods to reliably generate the filter UI.
-    - Sacrifices some advanced physics tuning for stability.
-    """
-    logging.info(f"Creating robust interactive graph, saving to {output_filename}...")
-
-    net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white",
-                  notebook=False, cdn_resources='remote')
-
-    node_color_map = {'document': '#d62828', 'sentence': '#003049', 'word': '#f77f00'}
-    edge_color_map = {
-        'belongs': '#2a9d8f', 'seq': '#e76f51', 'dep': '#8d99ae',
-        'same_lemma': '#6a4c93', 'sim': '#118ab2'
-    }
+    node_color_map = {'document': '#d62828', 'sentence': '#003049', 'word': '#f77f00', 'unknown': '#e0e0e0'}
+    edge_color_map = {'belongs': '#2a9d8f', 'seq': '#e76f51', 'dep': '#8d99ae', 'same_lemma': '#6a4c93',
+                      'sim': '#118ab2'}
     rev_dep_map = {v: k for k, v in dep_label_map.items()}
 
-    # Add nodes and assign them to a 'group' for filtering
     for node, data in nx_graph.nodes(data=True):
-        node_type = data.get('type', 'unknown')
-        label = data.get('text', 'N/A')
+        node_type = data.get('type', 'unknown');
         group = node_type
-
-        if node_type == "unknown" or label == "N/A":
-            print(f"Unknown node type: Type: {node_type}, Label: {label}\n\tNode: {node}, Data: {data}")
+        label = data.get('text', 'N/A')
 
         if node_type == 'sentence':
-            sent_idx = data.get('sentence_index', 'N/A')
-            label = f"SENT_{sent_idx}"
-            title = f"ID: {node}\nType: Sentence\nText: {data['text']}"
+            title = f"ID: {node}\nType: Sentence\nText: {label}"
+            label = f"SENT_{data.get('sentence_index', '?')}"
         elif node_type == 'word':
-            word_pos = data.get('position_in_sentence', 'N/A')
-            title = f"ID: {node}\nType: Word\nPosition in Sent: {word_pos}\nText: {label}"
-        else:
-            title = f"ID: {node}\nType: Document"
+            title = f"ID: {node}\nType: Word\nPos: {data.get('position_in_sentence', '?')}\nText: {label}"
+        else:  # Document or Unknown
+            title = f"ID: {node}\nType: {node_type.capitalize()}"
+
         size = 30 if node_type == 'document' else 20 if node_type == 'sentence' else 10 + len(str(label))
         net.add_node(node, label=str(label), title=title, color=node_color_map.get(node_type, 'grey'), size=size,
                      group=group)
 
-    # Add edges and assign them to a 'group' for filtering
     for u, v, data in nx_graph.edges(data=True):
-        edge_type = data['type']
+        edge_type = data.get('type');
         group = edge_type
-        if edge_type == 'belongs':
-            width = 4
-            title = "Type: Belongs (Learned Weight)"
-        elif edge_type == 'dep':
-            width = 1
-            feature_vec = data.get('feature')
-            if feature_vec is not None:
-                dep_idx = torch.argmax(feature_vec).item()
+        if not edge_type: continue
+
+        width = 1.5;
+        color = edge_color_map.get(edge_type, 'grey')
+        title = f"Type: {edge_type.capitalize()}"
+
+        if 'feature' in data:
+            feature_val = data['feature']
+            if torch.is_tensor(feature_val) and feature_val.numel() == 1:  # Scalar features
+                width = 1 + (feature_val.item() * 4.0)
+                title += f"\nFeature: {feature_val.item():.4f}"
+            elif edge_type == 'dep':  # Vector feature
+                width = 1
+                dep_idx = torch.argmax(feature_val).item()
                 dep_label = rev_dep_map.get(dep_idx, 'UNKNOWN')
                 title = f"Type: Dependency\nLabel: {dep_label}"
-            else:
-                title = "Type: Dependency"
-        else:
-            feature_val = data.get('feature', torch.tensor([1.0]))
-            scalar_feature = feature_val.item()
-            width = 1 + (scalar_feature * 4.0)
-            title = f"Type: {edge_type.capitalize()}\nFeature: {scalar_feature:.4f}"
-        net.add_edge(u, v, title=title, color=edge_color_map.get(edge_type, 'grey'), width=width, group=group)
 
-    # --- CHANGE: Using direct, robust methods to enable UI ---
-    # 1. Enable physics
+        net.add_edge(u, v, title=title, color=color, width=width, group=group)
+
     net.toggle_physics(True)
-
-    # 2. Explicitly request the filter UI for nodes and edges
     net.show_buttons(filter_=['nodes', 'edges'])
+    net.save_graph(output_filename)
+    logging.info(f"Successfully saved structural graph to {output_filename}.")
 
-    try:
-        net.save_graph(output_filename)
-        logging.info("Successfully saved interactive graph.")
-    except Exception as e:
-        logging.error(f"Could not save interactive graph: {e}")
+
+def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, dep_label_map: dict,
+                                 output_filename: str):
+    """
+    Injects learned attention weights into a NetworkX graph and creates an
+    interactive visualization, styling edges based on attention.
+    """
+    logging.info(f"Creating learned attention visualization for {explanation['doc_id']}...")
+
+    # 1. Create a copy to avoid modifying the original graph object
+    enriched_graph = nx_graph.copy()
+
+    # 2. Create Mappings to look up attention weights
+
+    print(f"Keys inside explanation: {explanation.keys()}")
+    print(f"Keys inside explanation['graph_data']: {explanation['graph_data'].keys()}")
+
+    node_mappings = explanation['node_mappings']
+
+    word_map_rev = {v: k for k, v in node_mappings['word'].items()}
+    sent_map_rev = {v: k for k, v in node_mappings['sentence'].items()}
+    doc_map_rev = {v: k for k, v in node_mappings['document'].items()}
+
+    word_att_edge_index, word_att_weights = explanation['word_to_sent_att']
+    word_att_map = {(word_map_rev.get(u), sent_map_rev.get(v)): w.item() for u, v, w in
+                    zip(word_att_edge_index[0].tolist(), word_att_edge_index[1].tolist(), word_att_weights)}
+
+    sent_att_edge_index, sent_att_weights = explanation['sent_to_doc_att']
+    sent_att_map = {(sent_map_rev.get(u), doc_map_rev.get(v)): w.item() for u, v, w in
+                    zip(sent_att_edge_index[0].tolist(), sent_att_edge_index[1].tolist(), sent_att_weights)}
+
+    # 3. Inject the learned attention scores into the graph copy
+    for u, v, key in enriched_graph.edges(keys=True):
+        if enriched_graph.edges[u, v, key].get('type') == 'belongs':
+            attention_score = word_att_map.get((u, v)) or sent_att_map.get((u, v))
+            if attention_score is not None:
+                enriched_graph.edges[u, v, key]['learned_attention'] = attention_score
+
+    # 4. Setup Pyvis Network and Styling
+    net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white", cdn_resources='remote')
+    node_color_map = {'document': '#d62828', 'sentence': '#003049', 'word': '#f77f00'}
+    static_edge_color_map = {'seq': '#e76f51', 'dep': '#8d99ae', 'same_lemma': '#6a4c93', 'sim': '#118ab2'}
+    cmap = mcolors.LinearSegmentedColormap.from_list("attention_cmap",
+                                                     ["#e63946", "#adb5bd", "#2a9d8f"])  # Red -> Grey -> Green
+
+    # 5. Add Nodes to Pyvis Graph
+    for node, data in enriched_graph.nodes(data=True):
+        node_type = data.get('type', 'unknown');
+        group = node_type;
+        label = data.get('text', 'N/A')
+        if node_type == 'sentence':
+            title = f"ID: {node}\nType: Sentence\nText: {label}"
+            label = f"SENT_{data.get('sentence_index', '?')}"
+        elif node_type == 'word':
+            title = f"ID: {node}\nType: Word\nPos: {data.get('position_in_sentence', '?')}\nText: {label}"
+        else:
+            title = f"ID: {node}\nType: {node_type.capitalize()}"
+        size = 30 if node_type == 'document' else 20 if node_type == 'sentence' else 10 + len(str(label))
+        net.add_node(node, label=str(label), title=title, color=node_color_map.get(node_type, 'grey'), size=size,
+                     group=group)
+
+    # 6. Add Edges to Pyvis Graph, with conditional styling
+    for u, v, data in enriched_graph.edges(data=True):
+        edge_type = data.get('type');
+        group = edge_type
+        if not edge_type: continue
+
+        attention_score = data.get('learned_attention')
+        if attention_score is not None:
+            # Style hierarchical edges based on learned attention
+            magnitude = abs(attention_score)
+            color_val = (attention_score + 1) / 2.0
+            color_hex = mcolors.to_hex(cmap(color_val))
+            width = 1 + magnitude * 8
+            title = f"Type: Belongs\nLearned Attention: {attention_score:+.4f}"
+            net.add_edge(u, v, title=title, color=color_hex, width=width, group=group)
+        else:
+            # Style static edges based on pre-computed features
+            width = 1.5
+            color = static_edge_color_map.get(edge_type, 'grey')
+            title = f"Type: {edge_type.capitalize()}"
+            net.add_edge(u, v, title=title, width=width, group=group, color=color)
+
+    net.toggle_physics(True)
+    net.show_buttons(filter_=['nodes', 'edges'])
+    net.save_graph(output_filename)
+    logging.info(f"Successfully saved learned attention graph to {output_filename}.")
