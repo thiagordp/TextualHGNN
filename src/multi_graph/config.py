@@ -14,9 +14,11 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     BATCH_SIZE: int = 1
-    LEARNING_RATE: float = 0.001
+    LEARNING_RATE: float = 0.0001
     EPOCHS: int = 100
     PATIENCE: int = 5
+    # A small value is recommended to start, e.g., 0.005
+    ENTROPY_WEIGHT: float = 0.05
 
 
 from dataclasses import dataclass, field

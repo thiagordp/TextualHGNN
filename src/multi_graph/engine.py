@@ -2,18 +2,81 @@
 
 import torch
 from sklearn.metrics import precision_recall_fscore_support
+from torch_scatter import scatter_add
+from tqdm import tqdm
 
 
-def train(model, train_loader, optimizer, criterion):
+def compute_entropy_loss(attention_weights: torch.Tensor, group_ids: torch.Tensor) -> torch.Tensor:
+    """
+    Calculates the entropy of attention distributions to encourage sparsity.
+    A lower entropy corresponds to a more "spiky" and focused attention.
+
+    Args:
+        attention_weights (torch.Tensor): The learned signed attention weights.
+        group_ids (torch.Tensor): The tensor identifying the parent node for each weight
+                                  (e.g., the sentence index for each word's attention).
+
+    Returns:
+        torch.Tensor: A scalar tensor representing the mean entropy loss.
+    """
+
+    # Use the absolute value, as entropy is defined for probability distributions (non-negative)
+    # Our signed_l1_norm ensures the absolute values in each group sum to 1.
+    p_attn = torch.abs(attention_weights)
+
+
+    # Calculate entropy for each attention value: H_i = -p_i * log(p_i)
+    # Add a small epsilon to prevent log(0) -> NaN
+    entropy = -p_attn * torch.log(p_attn + 1e-10)
+
+    # Sum the entropies for each group (each sentence/document)
+    grouped_entropy = scatter_add(entropy, group_ids, dim=0)
+
+    # Return the mean entropy across all groups in the batch
+    return torch.mean(grouped_entropy)
+
+def train(model, train_loader, optimizer, criterion, entropy_weight:float=0.005):
     model.train()
     total_loss = 0
-    for data in train_loader:
+    total_entropy_for_epoch = 0
+
+    progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Training")
+
+    for i,data in progress_bar:
+
         optimizer.zero_grad()
-        out, _ = model(data)
-        loss = criterion(out, data['document'].y)
-        loss.backward()
+
+        out, (word_att, sent_att) = model(data)
+
+        # 1. Calculate primary classification loss
+        classification_loss = criterion(out, data['document'].y)
+
+        # 2. Calculate auxiliary entropy loss
+        word_edge_index, word_weights = word_att
+        sent_edge_index, sent_weights = sent_att
+
+        word_entropy_loss = compute_entropy_loss(word_weights, word_edge_index[1])
+        sent_entropy_loss = compute_entropy_loss(sent_weights, sent_edge_index[1])
+
+        # Combine entropy losses
+        total_entropy_loss = word_entropy_loss + sent_entropy_loss
+
+        # 3. Combine all losses with the weighting factor
+        total_loss_batch = classification_loss + entropy_weight * total_entropy_loss
+
+        total_loss_batch.backward()
         optimizer.step()
-        total_loss += loss.item()
+
+        total_loss += total_loss_batch.item()
+
+        total_entropy_for_epoch += total_entropy_loss.item()
+        avg_entropy = total_entropy_for_epoch / (i + 1)
+
+        progress_bar.set_postfix(
+            loss=f"{total_loss_batch.item():.4f}",
+            avg_entropy=f"{avg_entropy:.4f}"
+        )
+
     return total_loss / len(train_loader)
 
 

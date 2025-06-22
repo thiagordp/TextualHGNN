@@ -21,6 +21,8 @@ from src.multi_graph.visualization import visualize_structural_graph, visualize_
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
+random.seed(42)
+
 # Generate timestamp
 timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 log_filename = f"logs/multi-level-graph_{timestamp}.log"
@@ -129,8 +131,8 @@ def run():
         # We zip the nx_graphs with the original 'docs' list to match each graph with its filename.
 
         for nx_graph, (original_filename, _) in tqdm.tqdm(zip(nx_graphs_for_class, docs),
-                                                     total=len(docs),
-                                                     desc="Creating graph visualizations"):
+                                                          total=len(docs),
+                                                          desc="Creating graph visualizations"):
             # Create a clean output filename (e.g., "123_4.html") from the original ("123_4.txt")
             output_html_name = f"{class_name.capitalize()}_{Path(original_filename).stem}.html"
             output_path = output_viz_dir / output_html_name
@@ -187,7 +189,14 @@ def run():
     patience_counter = 0
 
     for epoch in range(1, train_cfg.EPOCHS + 1):
-        loss = train(model, train_loader, optimizer, criterion)
+        loss = train(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            entropy_weight=train_cfg.ENTROPY_WEIGHT
+        )
+
         val_metrics, _, _, _ = test(model, val_loader, val_graphs)
 
         if val_metrics['f1'] > best_val_f1:
@@ -198,11 +207,11 @@ def run():
             patience_counter += 1
 
         logging.info(f"Epoch {epoch:02d}, "
-              f"Loss: {loss:.4f}, "
-              f"Val Acc:  {val_metrics['accuracy']:.4f}, "
-              f"Val Prec: {val_metrics['precision']:.4f}, "
-              f"Val Rec:  {val_metrics['recall']:.4f}, "
-              f"Val F1:   {val_metrics['f1']:.4f}")
+                     f"Loss: {loss:.4f}, "
+                     f"Val Acc:  {val_metrics['accuracy']:.4f}, "
+                     f"Val Prec: {val_metrics['precision']:.4f}, "
+                     f"Val Rec:  {val_metrics['recall']:.4f}, "
+                     f"Val F1:   {val_metrics['f1']:.4f}")
 
         if patience_counter >= train_cfg.PATIENCE:
             logging.info(f"Early stopping at epoch {epoch}.")
@@ -234,7 +243,7 @@ def run():
                 #              f"Predicted: '{class_names[explanation['prediction']]}' | "
                 #              f"Actual: '{class_names[explanation['actual']]}'")
 
-                output_html_path = output_viz_dir / f"{Path(doc_filename).stem}_learned_attention.html"
+                output_html_path = output_viz_dir / f"{Path(doc_filename).stem}_learned_attention_entropy.html"
 
                 # Call the visualization function for the current explanation
                 visualize_learned_attentions(
