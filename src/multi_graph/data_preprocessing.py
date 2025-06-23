@@ -21,7 +21,7 @@ def preprocess_text(text: str) -> str:
         str: A fully cleaned and standardized document string.
     """
 
-    def _replace_special_chars(text: str) -> str:
+    def _replace_special_chars(target: str) -> str:
         """Replaces a curated list of symbols and special characters."""
         # Note: Extensive replacement rules can be managed in a separate config file.
         replacements = {
@@ -31,23 +31,24 @@ def preprocess_text(text: str) -> str:
             "½": " half ", "¼": " quarter ", "¾": " three quarters ",
             "–": "-", "—": "-", "‘": "'", "’": "'", "“": "\"", "”": "\"",
             "´": "'", "`": "'", "¨": "\"", "…": "...", "...": "... ", "€": " euro ",
-            "£": " pound ", "$": " dollar "
+            "£": " pound ", "$": " dollar ", "**": "*"
         }
+
         for old, new in replacements.items():
-            text = text.replace(old, new)
+            target = target.replace(old, new)
 
         # Remove any remaining simple HTML tags
-        text = re.sub(r'<[^>]+>', '', text)
-        return text
+        target = re.sub(r'<[^>]+>', '', target)
+        return target
 
-    def _normalize_unicode(text: str) -> str:
-        """Handles unicode normalization and removes non-ASCII characters."""
-        text = unicodedata.normalize('NFKD', text)
-        return text.encode('ascii', 'ignore').decode('utf-8', 'ignore')
+    def _normalize_unicode(target: str) -> str:
+        """Handles Unicode normalization and removes non-ASCII characters."""
+        target = unicodedata.normalize('NFKD', target)
+        return target.encode('ascii', 'ignore').decode('utf-8', 'ignore')
 
-    def _expand_contractions(text):
+    def _expand_contractions(target):
         # Expand contractions using the contractions library
-        return contractions.fix(text)
+        return contractions.fix(target)
 
     # --- Preprocessing Pipeline ---
     # 1. Initial character and symbol replacement

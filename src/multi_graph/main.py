@@ -23,6 +23,10 @@ from src.multi_graph.visualization import visualize_structural_graph, visualize_
 os.makedirs("logs", exist_ok=True)
 random.seed(42)
 
+import nltk
+nltk.download('vader_lexicon', quiet=True)
+nltk.download('stopwords', quiet=True)
+
 # Generate timestamp
 timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 log_filename = f"logs/multi-level-graph_{timestamp}.log"
@@ -159,7 +163,7 @@ def run():
     indices = list(range(len(all_hetero_graphs)))
 
     # --- 4. Create Datasets and DataLoaders ---
-    train_indices, test_val_indices = train_test_split(indices, test_size=0.4, random_state=42, stratify=all_labels)
+    train_indices, test_val_indices = train_test_split(indices, test_size=0.3, random_state=42, stratify=all_labels)
     val_indices, test_indices = train_test_split(test_val_indices, test_size=0.5, random_state=42,
                                                  stratify=[all_labels[i] for i in test_val_indices])
 
@@ -222,7 +226,10 @@ def run():
     model.load_state_dict(torch.load('best_model.pth', weights_only=True))
     # Pass test_graphs to align explanations with the correct original data
     test_metrics, true_labels, pred_labels, final_explanations = test(model, test_loader, test_graphs)
-    logging.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}, F1-Score: {test_metrics['f1']:.4f}")
+    logging.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}, "
+                 f"Precision={test_metrics['precision']:.4f}, "
+                 f"Recall={test_metrics['recall']:.4f}, "
+                 f"F1-Score: {test_metrics['f1']:.4f}")
 
     if final_explanations:
         logging.info(f"\n--- Generating {len(final_explanations)} Explainability Visualizations ---")

@@ -24,7 +24,6 @@ def compute_entropy_loss(attention_weights: torch.Tensor, group_ids: torch.Tenso
     # Our signed_l1_norm ensures the absolute values in each group sum to 1.
     p_attn = torch.abs(attention_weights)
 
-
     # Calculate entropy for each attention value: H_i = -p_i * log(p_i)
     # Add a small epsilon to prevent log(0) -> NaN
     entropy = -p_attn * torch.log(p_attn + 1e-10)
@@ -35,14 +34,15 @@ def compute_entropy_loss(attention_weights: torch.Tensor, group_ids: torch.Tenso
     # Return the mean entropy across all groups in the batch
     return torch.mean(grouped_entropy)
 
-def train(model, train_loader, optimizer, criterion, entropy_weight:float=0.005):
+
+def train(model, train_loader, optimizer, criterion, entropy_weight: float = 0.005):
     model.train()
     total_loss = 0
     total_entropy_for_epoch = 0
 
     progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Training")
 
-    for i,data in progress_bar:
+    for i, data in progress_bar:
 
         optimizer.zero_grad()
 
@@ -72,10 +72,11 @@ def train(model, train_loader, optimizer, criterion, entropy_weight:float=0.005)
         total_entropy_for_epoch += total_entropy_loss.item()
         avg_entropy = total_entropy_for_epoch / (i + 1)
 
-        progress_bar.set_postfix(
-            loss=f"{total_loss_batch.item():.4f}",
-            avg_entropy=f"{avg_entropy:.4f}"
-        )
+        if i % 50 == 0:
+            progress_bar.set_postfix(
+                loss=f"{total_loss_batch.item():.4f}",
+                avg_entropy=f"{avg_entropy:.4f}"
+            )
 
     return total_loss / len(train_loader)
 

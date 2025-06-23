@@ -18,7 +18,7 @@ class TrainingConfig:
     EPOCHS: int = 100
     PATIENCE: int = 5
     # A small value is recommended to start, e.g., 0.005
-    ENTROPY_WEIGHT: float = 0.05
+    ENTROPY_WEIGHT: float = 0.025
 
 
 from dataclasses import dataclass, field
@@ -38,10 +38,11 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 2000
+    SAMPLES_PER_CLASS: int = 3000
 
     SPACY_MODEL: str = 'en_core_web_lg'
-    EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'
+    # EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'
+    EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
     SIMILARITY_THRESHOLD: float = 0.85
 
 
