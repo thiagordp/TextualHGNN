@@ -59,7 +59,16 @@ class DocumentGraphBuilder:
         self.dep_label_map = {label: i for i, label in enumerate(COMMON_DEP_LABELS)}
         self.used_deps = {label: 0 for label in COMMON_DEP_LABELS}
         self.embedding_dim = self.model.config.hidden_size
-        logging.info(f"Models and configuration loaded successfully. Embedding dim: {self.embedding_dim}")
+
+        config = self.model.config
+        logging.info("--- Embedding Model Details ---")
+        logging.info(f"  - Model Type:                {config.model_type}")
+        logging.info(f"  - Hidden Size/Embedding Dim: {self.embedding_dim}")
+        logging.info(f"  - Number of Layers:          {config.num_hidden_layers}")
+        logging.info(f"  - Number of Attention Heads: {config.num_attention_heads}")
+        logging.info(f"  - Vocabulary Size:           {config.vocab_size}")
+        logging.info("---------------------------------")
+
 
     def _get_batch_embedding(self, texts: list[str]) -> torch.Tensor:
         """Generates embeddings for a batch of texts."""

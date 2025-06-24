@@ -170,8 +170,9 @@ class ConceptGrounding:
 
             terms_cg_methods = {}
 
-            methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
+            # methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
             # methods = ["top_l0", "llm_search"]
+            methods = ["top_l0", "llm_search"]
             for cg_method in methods:
                 logging.info("Starting with method " + cg_method)
 

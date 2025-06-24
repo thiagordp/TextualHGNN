@@ -7,6 +7,12 @@ import matplotlib.colors as mcolors
 from pyvis.network import Network
 from torch_geometric.data import HeteroData
 
+import logging
+import torch
+import networkx as nx
+import matplotlib.colors as mcolors
+from pyvis.network import Network
+from src.models.graph_explainability.concept_grounding import ConceptGrounding
 
 def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, output_filename: str):
     """
@@ -153,3 +159,102 @@ def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, d
     net.show_buttons(filter_=['nodes', 'edges'])
     net.save_graph(output_filename)
     # logging.info(f"Successfully saved learned attention graph to {output_filename}.")
+
+
+def visualize_diffpool_explanation(cg:ConceptGrounding, nx_graph: nx.MultiDiGraph, output_filename: str,
+                                   assignment_threshold: float = 0.05):
+    """
+    Creates an interactive visualization of a DiffPool explanation.
+
+    UPDATED:
+    - Only shows assignment edges with a weight > assignment_threshold.
+    """
+    logging.info(f"Creating DiffPool explanation visualization for {cg.data_sample_id}...")
+
+    # --- 1. Setup Pyvis Network and Styling ---
+    net = Network(height="900px", width="100%", bgcolor="#222222", font_color="white", cdn_resources='remote')
+    node_color_map = {'document': '#d62828', 'L2': '#fca311', 'L1': '#003049', 'word': '#f77f00'}
+    edge_color_map = {'belongs': '#2a9d8f', 'seq': '#e76f51', 'dep': '#8d99ae'}
+
+    # --- 2. Add Nodes for All Levels ---
+    # This logic assumes 'node_map' exists on the graph nodes from the data loader
+    l0_id_to_idx_map = {node_id: data['node_map'] for node_id, data in nx_graph.nodes(data=True) if 'node_map' in data}
+
+    for node_id, data in nx_graph.nodes(data=True):
+        word_text = data.get('text', 'N/A')
+        net.add_node(node_id, label=word_text, title=f"L0: {word_text}",
+                     color=node_color_map['word'], size=12, group='word')
+
+    # Level 1 nodes with Concept Grounding labels
+    num_l1_nodes = cg.x_l1.shape[0]
+    for i in range(num_l1_nodes):
+        node_id = f"L1_{i}"
+        l1_explanation = cg.explanation.get('explanation', {}).get(str(i))
+        display_label = f"L1_{i}"
+        tooltip_title = f"Abstract Node L1_{i}"
+        if l1_explanation:
+            cg_methods = l1_explanation.get('words_cg_methods', {})
+            display_label = cg_methods.get('llm_search', [f"L1_{i}"])[0]
+            tooltip_title = f"Abstract Node L1_{i}\n\n--- Grounded Concepts ---\n"
+            tooltip_title += f"LLM-based: {cg_methods.get('llm_search')}\n"
+            tooltip_title += f"Top L0 Word: {cg_methods.get('top_l0')}\n"
+            tooltip_title += f"--- Assigned Words ---\n{l1_explanation.get('words_l0', [])}"
+        net.add_node(node_id, label=display_label, title=tooltip_title,
+                     color=node_color_map['L1'], size=25, group='L1')
+
+    # Level 2 and Document Nodes
+    num_l2_nodes = cg.x_l2.shape[0]
+    for i in range(num_l2_nodes):
+        node_id = f"L2_{i}"
+        net.add_node(node_id, label=f"L2_{i}", title=f"Abstract Node L2_{i}",
+                     color=node_color_map['L2'], size=35, group='L2')
+        net.add_edge(node_id, "DOC", color=edge_color_map['belongs'], width=2, group='belongs')
+
+    net.add_node("DOC", label="Document", title="Final Graph Representation",
+                 color=node_color_map['document'], size=45, group='document')
+
+    # --- 3. Add Edges with Updated Thresholding Logic ---
+    l0_idx_to_id_map = {v: k for k, v in l0_id_to_idx_map.items()}
+
+    # L0 -> L1 assignment edges
+    assignment_matrix_s01 = cg.s01
+    for l0_idx in range(assignment_matrix_s01.shape[0]):
+        for l1_idx in range(assignment_matrix_s01.shape[1]):
+            weight = assignment_matrix_s01[l0_idx, l1_idx].item()
+            # --- CHANGE: Use the configurable assignment_threshold ---
+            if weight > assignment_threshold:
+                l0_node_id, l1_node_id = l0_idx_to_id_map.get(l0_idx), f"L1_{l1_idx}"
+                if l0_node_id:
+                    net.add_edge(l0_node_id, l1_node_id,
+                                 title=f"Belongs (Assignment: {weight:.4f})",
+                                 width=0.5 + weight * 6,
+                                 opacity=0.4 + weight * 0.6,
+                                 color=edge_color_map['belongs'],
+                                 group='belongs')
+
+    # L1 -> L2 assignment edges
+    assignment_matrix_s12 = cg.s12
+    for l1_idx in range(assignment_matrix_s12.shape[0]):
+        for l2_idx in range(assignment_matrix_s12.shape[1]):
+            weight = assignment_matrix_s12[l1_idx, l2_idx].item()
+            # --- CHANGE: Use the configurable assignment_threshold ---
+            if weight > assignment_threshold:
+                net.add_edge(f"L1_{l1_idx}", f"L2_{l2_idx}",
+                             title=f"Belongs (Assignment: {weight:.4f})",
+                             width=1 + weight * 5,
+                             color=edge_color_map['belongs'],
+                             opacity=0.7,
+                             group='belongs')
+
+    # Original word-word edges for context
+    for u, v, data in nx_graph.edges(data=True):
+        edge_type = data.get('type')
+        if edge_type in ['dep', 'seq']:
+            net.add_edge(u, v, color=edge_color_map.get(edge_type, 'grey'), width=0.5, dashes=True,
+                         title=f"Type: {edge_type}", group=edge_type)
+
+    net.toggle_physics(True)
+    net.show_buttons(filter_=True)
+    net.save_graph(output_filename)
+
+    logging.info(f"Successfully saved DiffPool explanation graph to {output_filename}.")

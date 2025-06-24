@@ -10,6 +10,8 @@ import tqdm
 from sklearn.model_selection import train_test_split
 from torch_geometric.loader import DataLoader
 
+import nltk
+
 # Local imports from our new modules
 from src.multi_graph.config import ModelConfig, TrainingConfig, DataConfig
 from src.multi_graph.data_preprocessing import preprocess_text
@@ -23,7 +25,6 @@ from src.multi_graph.visualization import visualize_structural_graph, visualize_
 os.makedirs("logs", exist_ok=True)
 random.seed(42)
 
-import nltk
 nltk.download('vader_lexicon', quiet=True)
 nltk.download('stopwords', quiet=True)
 
@@ -128,7 +129,7 @@ def run():
     for class_idx, (class_name, docs) in enumerate(docs_by_class.items()):
         print(f"\n--- Building Graphs for Class: {class_name} ---")
 
-        # --- FIX: Unpack all three return values from the builder ---
+        # --- Unpack all three return values from the builder ---
         nx_graphs_for_class, hetero_graphs_for_class, processed_filenames = builder.process_documents(docs)
 
         # --- Loop through the generated graphs and create a visualization for each ---

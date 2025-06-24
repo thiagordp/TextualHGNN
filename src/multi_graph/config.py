@@ -16,9 +16,9 @@ class TrainingConfig:
     BATCH_SIZE: int = 1
     LEARNING_RATE: float = 0.0001
     EPOCHS: int = 100
-    PATIENCE: int = 5
+    PATIENCE: int = 10
     # A small value is recommended to start, e.g., 0.005
-    ENTROPY_WEIGHT: float = 0.025
+    ENTROPY_WEIGHT: float = 0.01
 
 
 from dataclasses import dataclass, field
@@ -42,7 +42,8 @@ class DataConfig:
 
     SPACY_MODEL: str = 'en_core_web_lg'
     # EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'
-    EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
+    EMBEDDING_MODEL: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+    # EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
     SIMILARITY_THRESHOLD: float = 0.85
 
 

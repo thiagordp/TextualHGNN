@@ -15,12 +15,13 @@ from src.models.graph_explainability.embeddings_oracle import EmbeddingOracle
 from src.models.graph_explainability.llm_oracle import LLMOracle
 import torch_geometric.transforms as T
 
+from src.multi_graph.visualization import visualize_diffpool_explanation
 from src.utils.general_utils import plot_multidigraph_to_pdf, setup_logging, load_config
 
 
 def main():
-    # LANG = "english"
-    LANG = "italian"
+    LANG = "english"
+    #LANG = "italian"
     CONFIG = load_config(LANG, "src/utils/config.json")
 
     if LANG == "english":
@@ -47,30 +48,30 @@ def main():
     EMBEDDINGS_DATABASE_PATH = f"data/oracle/embeddings_{DATASET}.db"
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ROOT = f"data/datasets/{DATASET}"
-    DOCUMENTS_TO_EXPLAIN = 5
+    DOCUMENTS_TO_EXPLAIN = 2
 
     # TODO: check the inputs below based on the loaded model.
     # Imprisonment dims
-    diffpool_model = DiffPool(
-        max_num_nodes=max_num_nodes,
-        in_channels=100,
-        hidden_channels=100,
-        out_channels=2,
-        inner_channels=16,
-        softmax_assign=True,
-        decrease_proportion=0.05,
-    )
-
-    # IMDB dims
     # diffpool_model = DiffPool(
     #     max_num_nodes=max_num_nodes,
     #     in_channels=100,
     #     hidden_channels=100,
     #     out_channels=2,
-    #     inner_channels=64,
+    #     inner_channels=16,
     #     softmax_assign=True,
-    #     decrease_proportion=0.1,
+    #     decrease_proportion=0.05,
     # )
+
+    # IMDB dims
+    diffpool_model = DiffPool(
+        max_num_nodes=max_num_nodes,
+        in_channels=100,
+        hidden_channels=100,
+        out_channels=2,
+        inner_channels=64,
+        softmax_assign=True,
+        decrease_proportion=0.1,
+    )
 
     diffpool_model.load_state_dict(weights)
     diffpool_model = diffpool_model.to(device=DEVICE)
@@ -124,7 +125,7 @@ def main():
             embedding_oracle=oracle,
             llm_oracle=llm_oracle,
             graph=data_element,
-            hyper_nodes_to_explain=5,
+            hyper_nodes_to_explain=50,
             nodes_per_hyper_node=5,
             original_raw_file_path=f"{ROOT}/test/raw/",
             language=LANG
@@ -139,6 +140,15 @@ def main():
 
             os.makedirs(output_path, exist_ok=True)
             cg.save_explanation(Path(output_path) / f"{cg.data_sample_id}.json")
+            interactive_output_path = Path(output_path) / f"{cg.data_sample_id}_visualization.html"
+
+            # In pipelines/concept_grounding_pipeline.py
+            visualize_diffpool_explanation(
+                cg=cg,
+                nx_graph=graph,
+                output_filename=str(interactive_output_path),
+                assignment_threshold=0.1  # Example of using the new parameter
+            )
 
 
 def retrieve_graph(list_of_paths_to_graphs, sample_id, output_path) -> nx.MultiDiGraph | None:
@@ -147,11 +157,11 @@ def retrieve_graph(list_of_paths_to_graphs, sample_id, output_path) -> nx.MultiD
 
         if doc_name.find(sample_id) >= 0:
             if graph_nx.number_of_nodes() <= 300:
-                plot_multidigraph_to_pdf(
-                    graph_nx,
-                    output_path=output_path + f"/graph_{sample_id}.pdf",
-                    open_pdf=False
-                )
+                # plot_multidigraph_to_pdf(
+                #     graph_nx,
+                #     output_path=output_path + f"/graph_{sample_id}.pdf",
+                #     open_pdf=False
+                # )
                 return graph_nx
             else:
                 return None
