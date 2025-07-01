@@ -32,9 +32,17 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
             transform (callable, optional): A function/transform. Defaults to None.
         """
 
-        self.class_map = None
+        self.root = root
         self.split = split
         self.builder = builder
+
+        class_map_file_path = osp.join(root, self.split, 'processed',  'class_map.pt')
+        if osp.exists(class_map_file_path):
+            self.class_map = torch.load(class_map_file_path)
+            logging.info(f"Loaded class map for '{self.split}' split: {self.class_map}")
+        else:
+            self.class_map = None
+            logging.warning(f"Class map file not found at {self.class_map_path}. It will be created during processing.")
 
         super().__init__(root, transform)
 
@@ -62,7 +70,7 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
         # A simple way to check if processing is done is to look for a marker file.
         if osp.exists(osp.join(self.processed_dir, 'processing_done.marker')):
             # If done, the "processed files" are all the .pt files.
-            return [f for f in os.listdir(self.processed_dir) if f.endswith('.pt')]
+            return [f for f in os.listdir(self.processed_dir) if f.endswith('.pt') and f.startswith("data_idx")]
         return []  # Otherwise, processing needs to happen.
 
     def process(self):
@@ -84,7 +92,7 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
         raw_docs_to_process = []
         class_names = sorted([d.name for d in os.scandir(self.raw_dir) if d.is_dir()])
         self.class_map = {name: i for i, name in enumerate(class_names)}
-        torch.save(self.class_map, osp.join(self.root, self.split, 'processed',  'class_map.pt'))
+        torch.save(self.class_map, osp.join(self.root, self.split, 'processed', 'class_map.pt'))
 
         for class_name in self.class_map.keys():
             class_path = osp.join(self.raw_dir, class_name)
@@ -113,7 +121,7 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
             [(filename, text) for filename, text, _ in cleaned_docs],
         )
 
-        viz_output_dir = Path(self.root) / "visualizations" / "structural" / self.split
+        viz_output_dir = Path(self.root) / self.split / "visualizations" / "structural"
         viz_output_dir.mkdir(parents=True, exist_ok=True)
         logging.info(f"Structural visualizations will be saved to '{viz_output_dir}'")
 
@@ -143,7 +151,7 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
             h_graph['document'].doc_id = filename
 
             # Save the HeteroData object for the GNN
-            torch.save(h_graph, osp.join(self.processed_dir, f'data_{i}.pt'))
+            torch.save(h_graph, osp.join(self.processed_dir, f'data_idx_{i:07d}.pt'))
             # Save the NetworkX object for visualization
             torch.save(nx_graphs[i], osp.join(self.nx_graph_dir, f'{filename}.nx'))
 
@@ -157,5 +165,5 @@ class MultiLevelGraphOnDiskDataset(OnDiskDataset):
 
     def get(self, idx: int):
         """Loads the pre-processed graph object at a given index."""
-        data = torch.load(osp.join(self.processed_dir, f'data_{idx:07d}.pt'))
+        data = torch.load(osp.join(self.processed_dir, f'data_idx_{idx:07d}.pt'))
         return data

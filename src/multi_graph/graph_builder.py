@@ -1,15 +1,17 @@
 # graph_builder.py
+import logging
+from typing import List
 
-import spacy
-import torch
 import networkx as nx
 import numpy as np
-import logging
-
+import pandas as pd
+import spacy
+import torch
+from spacy.tokens import Doc, Span
+from torch.nn.functional import cosine_similarity, one_hot
 from torch_geometric.data import HeteroData
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
-from torch.nn.functional import cosine_similarity, one_hot
 
 # Local imports
 from src.multi_graph.config import COMMON_DEP_LABELS
@@ -42,6 +44,24 @@ def get_positional_encoding(max_len: int, d_model: int) -> torch.Tensor:
         pe[:, 1::2] = torch.cos(position * div_term)
     return pe
 
+from spacy.language import Language
+
+@Language.component("split_on_semicolon")
+def _split_on_semicolon(doc):
+    for token in doc[:-1]:
+        if token.text in [";", ":"]:
+            doc[token.i + 1].is_sent_start = True
+    return doc
+
+
+# Dicionário de gatilhos que identificamos a partir dos exemplos.
+# Pode ser definido como uma constante no módulo.
+CLAUSE_TRIGGERS = {
+    "GERUNDS": ["considerando", "tendo", "sendo", "caber", "restringir", "comparecendo", "visando"],
+    "RELATIVES": ["que", "o que", "qual seja", "cujo", "cuja"],
+    "CONNECTORS": ["isso pois", "nesse sentido", "de mais a mais", "destarte", "outrossim"]
+}
+
 
 class DocumentGraphBuilder:
     """
@@ -53,6 +73,10 @@ class DocumentGraphBuilder:
     def __init__(self, spacy_model: str, embedding_model: str, similarity_threshold: float):
         logging.info("Initializing DocumentGraphBuilder...")
         self.nlp = spacy.load(spacy_model)
+
+        if not self.nlp.has_pipe("split_on_semicolon"):
+            self.nlp.add_pipe("split_on_semicolon", before="parser")
+
         self.tokenizer = AutoTokenizer.from_pretrained(embedding_model)
         self.model = AutoModel.from_pretrained(embedding_model)
         self.similarity_threshold = similarity_threshold
@@ -61,14 +85,33 @@ class DocumentGraphBuilder:
         self.embedding_dim = self.model.config.hidden_size
 
         config = self.model.config
+        self.graph_stats = []
         logging.info("--- Embedding Model Details ---")
+        logging.info(f"  - Model Type:                {config.name_or_path}")
         logging.info(f"  - Model Type:                {config.model_type}")
-        logging.info(f"  - Hidden Size/Embedding Dim: {self.embedding_dim}")
+        logging.info(f"  - Hidden Size/Embedding Dim: {config.hidden_size}")
         logging.info(f"  - Number of Layers:          {config.num_hidden_layers}")
         logging.info(f"  - Number of Attention Heads: {config.num_attention_heads}")
         logging.info(f"  - Vocabulary Size:           {config.vocab_size}")
         logging.info("---------------------------------")
 
+    # --- NEW: Public method to display aggregated statistics ---
+    def display_graph_statistics(self):
+        """
+        Calculates and logs the median and standard deviation of graph structural properties
+        across all documents processed.
+        """
+        if not self.graph_stats:
+            logging.warning("No graph statistics were collected. Cannot display.")
+            return
+
+        df = pd.DataFrame(self.graph_stats)
+        logging.info("\n--- Graph Statistics Summary ---")
+        # Use to_string() to ensure the table format is respected in the log
+        print(df.describe().to_string())
+        logging.info("--------------------------------\n")
+
+        df.to_excel("data/graph_statistics.xlsx", index=False)
 
     def _get_batch_embedding(self, texts: list[str]) -> torch.Tensor:
         """Generates embeddings for a batch of texts."""
@@ -191,10 +234,92 @@ class DocumentGraphBuilder:
                     data[edge_type].edge_attr = data[edge_type].edge_attr[valid_mask]
         return data
 
+    def _refine_sentence_splits(self, doc: Doc, max_length: int = 80) -> List[Span]:
+        """
+        Recebe um Doc e refina a segmentação. Quebra sentenças que excedem
+        max_length usando gatilhos linguísticos. Esta é a Etapa 2 da nossa estratégia híbrida.
+
+        Args:
+            doc: O Doc processado pelo spaCy (que já passou pela quebra por ';').
+            max_length: O número máximo de tokens para uma sentença ser considerada "aceitável".
+
+        Returns:
+            Uma lista de Spans, onde cada Span é uma sentença final e mais curta.
+        """
+        final_sentences = []
+        # doc.sents aqui já contém as sentenças quebradas por ponto e vírgula
+        for sent in doc.sents:
+            if len(sent) <= max_length:
+                final_sentences.append(sent)
+                continue
+
+            # Se a sentença ainda for muito longa, aplicamos a quebra agressiva.
+            split_indices = []
+            for i in range(len(sent) - 2):  # Itera até o antepenúltimo para checar locuções
+                token = sent[i]
+
+                # O padrão principal que procuramos é uma vírgula
+                if token.text != ",":
+                    continue
+
+                # Após a vírgula, verificamos nossos gatilhos
+                next_token = sent[i + 1]
+                next_two_tokens_text = sent[i + 1: i + 3].text.lower()
+
+                # Condição 1: É um gerúndio?
+                if next_token.lemma_.lower() in CLAUSE_TRIGGERS["GERUNDS"]:
+                    split_indices.append(next_token.i)  # O ponto de quebra é o próprio token
+
+                # Condição 2: É um pronome relativo?
+                elif next_token.text.lower() in CLAUSE_TRIGGERS["RELATIVES"]:
+                    # Verificação extra para 'que': só quebrar se não for seguido por um verbo no infinitivo
+                    # para evitar quebrar "..., que fazer"
+                    if next_token.text.lower() == 'que':
+                        # Verifica se há um token seguinte para evitar erro de índice
+                        if (i + 2) < len(sent):
+                            token_after_que = sent[i + 2]
+                            # A forma correta de checar o infinitivo é via morfologia.
+                            # "VerbForm=Inf" é a anotação para infinitivos.
+                            # Também verificamos se o token é de fato um verbo.
+                            is_infinitive = "Inf" in token_after_que.morph.get("VerbForm") and token_after_que.pos_ == 'VERB'
+
+                            # SÓ quebramos a sentença se NÃO for um verbo no infinitivo.
+                            if not is_infinitive:
+                                split_indices.append(next_token.i)
+                    else:
+                        split_indices.append(next_token.i)
+
+                # Condição 3: É um dos nossos conectivos lógicos de duas palavras?
+                elif next_two_tokens_text in CLAUSE_TRIGGERS["CONNECTORS"]:
+                    split_indices.append(sent[i + 3].i)  # Quebra após o conector
+
+            # Se encontramos pontos de quebra, fatiamos a sentença original
+            if split_indices:
+                start_idx = sent.start
+                for point_idx in sorted(list(set(split_indices))):  # Usa set para evitar duplicatas
+                    # Garante que o ponto de quebra esteja dentro dos limites da sentença
+                    if start_idx < point_idx < sent.end:
+                        final_sentences.append(doc[start_idx:point_idx])
+                        start_idx = point_idx
+                # Adiciona o último segmento da sentença
+                final_sentences.append(doc[start_idx:sent.end])
+            else:
+                # Se mesmo após a lógica agressiva não foi possível quebrar,
+                # mantemos a sentença longa para não perder a informação.
+                final_sentences.append(sent)
+
+        return final_sentences
+
     def build_graphs_for_document(self, doc_text: str, filename: str, doc_id: int) -> tuple[
         nx.MultiDiGraph, HeteroData]:
+
         spacy_doc = self.nlp(doc_text)
-        sentences = list(spacy_doc.sents)
+
+        if self.nlp.meta["lang"] == "pt":
+            sentences = self._refine_sentence_splits(spacy_doc, max_length=30)
+        else:
+            sentences = spacy_doc.sents
+
         nx_graph = nx.MultiDiGraph(doc_id=doc_id, text=doc_text, filename=filename)
         doc_node_id = f"doc_{doc_id}"
         content_words = [tok.text for tok in spacy_doc if not ((tok.is_stop and tok.pos_ != "PRP") or tok.is_punct)]
@@ -283,6 +408,36 @@ class DocumentGraphBuilder:
                                                                       type='sim', feature=torch.tensor([sim]))
 
         nx_graph = self._validate_and_prune_nx_graph(nx_graph)
+
+        sents_per_doc = len(sentences)
+        words_per_sent = [len(list(s)) for s in sentences]
+
+        num_word_nodes = len([n for n, d in nx_graph.nodes(data=True) if d.get('type') == 'word'])
+        num_sent_nodes = len([n for n, d in nx_graph.nodes(data=True) if d.get('type') == 'sentence'])
+
+        num_dep_edges = len([e for e in nx_graph.edges(data=True) if e[2].get('type') == 'dep'])
+        num_lemma_edges = len([e for e in nx_graph.edges(data=True) if e[2].get('type') == 'same_lemma'])
+
+        # Split sequence edges by node type
+        num_word_seq_edges = len([e for e in nx_graph.edges(data=True) if
+                                  e[2].get('type') == 'seq' and nx_graph.nodes[e[0]].get('type') == 'word'])
+        num_sent_seq_edges = len([e for e in nx_graph.edges(data=True) if
+                                  e[2].get('type') == 'seq' and nx_graph.nodes[e[0]].get('type') == 'sentence'])
+        num_sent_sim_edges = len([e for e in nx_graph.edges(data=True) if e[2].get('type') == 'sim'])
+
+        self.graph_stats.append({
+            'filename': filename,
+            'sentences_per_document': sents_per_doc,
+            'words_per_sentence_avg': np.mean(words_per_sent) if words_per_sent else 0,
+            'word_nodes': num_word_nodes,
+            'sentence_nodes': num_sent_nodes,
+            'dep_edges': num_dep_edges,
+            'word_seq_edges': num_word_seq_edges,
+            'same_lemma_edges': num_lemma_edges,
+            'sent_seq_edges': num_sent_seq_edges,
+            'sent_sim_edges': num_sent_sim_edges,
+        })
+
         return nx_graph, self.to_hetero_data(nx_graph, filename)
 
     def to_hetero_data(self, nx_graph: nx.MultiDiGraph, filename: str) -> HeteroData:

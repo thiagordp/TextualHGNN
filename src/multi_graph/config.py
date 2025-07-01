@@ -14,11 +14,11 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     BATCH_SIZE: int = 1
-    LEARNING_RATE: float = 0.0001
-    EPOCHS: int = 100
-    PATIENCE: int = 10
+    LEARNING_RATE: float = 0.001
+    EPOCHS: int = 150
+    PATIENCE: int = 25
     # A small value is recommended to start, e.g., 0.005
-    ENTROPY_WEIGHT: float = 0.01
+    ENTROPY_WEIGHT: float = 0.005
 
 
 from dataclasses import dataclass, field
@@ -28,23 +28,35 @@ from dataclasses import dataclass, field
 class DataConfig:
     # --- CHANGE: Define base path and subdirectory mapping ---
     # Assumes a common structure like the IMDB dataset
-    DATASET_NAME:str="IMDB"
+    DATASET_NAME:str="STF_HC"
+    # DATASET_NAME:str="IMDB"
     BASE_DATA_PATH: str =f"data/datasets/{DATASET_NAME}"
 
-    # Use field(default_factory=...) for mutable defaults like dicts
+    # # Use field(default_factory=...) for mutable defaults like dicts
+    # CLASS_SUBDIRECTORIES: dict = field(default_factory=lambda: {
+    #     "positive": "train/raw/positive",
+    #     "negative": "train/raw/negative"
+    # })
     CLASS_SUBDIRECTORIES: dict = field(default_factory=lambda: {
-        "positive": "train/raw/positive",
-        "negative": "train/raw/negative"
+        "preso": "full/raw/Preso",
+        "solto": "full/raw/Solto"
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 3000
+    SAMPLES_PER_CLASS: int = 5000
 
-    SPACY_MODEL: str = 'en_core_web_lg'
+    # SPACY_MODEL: str = 'en_core_web_lg'
+    SPACY_MODEL: str = 'pt_core_news_lg'
+
     # EMBEDDING_MODEL: str = 'sentence-transformers/all-MiniLM-L6-v2'
-    EMBEDDING_MODEL: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+    # EMBEDDING_MODEL: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+    # SIMILARITY_THRESHOLD: float = 0.99
+
+    # EMBEDDING_MODEL: str = 'rufimelo/Legal-BERTimbau-base'
+
+    EMBEDDING_MODEL: str = 'cnmoro/bert-tiny-embeddings-english-portuguese'
+    SIMILARITY_THRESHOLD: float = 0.998
     # EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
-    SIMILARITY_THRESHOLD: float = 0.85
 
 
 @dataclass

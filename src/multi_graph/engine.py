@@ -42,8 +42,11 @@ def train(model, train_loader, optimizer, criterion, entropy_weight: float = 0.0
 
     progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Training")
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     for i, data in progress_bar:
 
+        data = data.to(device)
         optimizer.zero_grad()
 
         out, (word_att, sent_att) = model(data)
