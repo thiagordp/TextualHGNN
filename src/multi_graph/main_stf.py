@@ -28,6 +28,8 @@ from src.multi_graph.visualization import visualize_structural_graph, visualize_
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
 random.seed(42)
+torch.manual_seed(42)
+np.random.seed(42)
 
 nltk.download('vader_lexicon', quiet=True)
 nltk.download('stopwords', quiet=True)
@@ -36,17 +38,11 @@ nltk.download('stopwords', quiet=True)
 timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 log_filename = f"logs/multi-level-graph_{timestamp}.log"
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(log_filename),
-        logging.StreamHandler()  # Optional: also log to console
-    ]
+    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()]
 )
-
-# Example usage
 logging.info("Logging setup complete.")
 
 
@@ -94,6 +90,24 @@ def set_custom_boundaries_advanced(doc):
         if token.text in [";", ":"]:
             doc[token.i + 1].is_sent_start = True
     return doc
+
+
+# --- NEW: Helper function for creating descriptive filenames ---
+def _create_param_string(data_cfg: DataConfig, model_cfg: ModelConfig = None, train_cfg: TrainingConfig = None) -> str:
+    """Creates a standardized string of hyperparameters for filenames."""
+    embedding_name = data_cfg.EMBEDDING_MODEL.split('/')[-1].replace('-', '_')
+
+    parts = [embedding_name]
+
+    if model_cfg:
+        parts.append(f"H{model_cfg.HIDDEN_CHANNELS}")
+
+    if train_cfg:
+        parts.append(f"LR{train_cfg.LEARNING_RATE}")
+        parts.append(f"EW{train_cfg.ENTROPY_WEIGHT}")
+
+    return "_".join(parts)
+
 
 def run():
     """Main function to run the entire pipeline."""
@@ -225,6 +239,7 @@ def run():
     patience_counter = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model= model.to(device)
+
     for epoch in range(1, train_cfg.EPOCHS + 1):
         loss = train(
             model,
@@ -256,7 +271,7 @@ def run():
 
     # --- 7. Final Evaluation and Explainability ---
     logging.info("\n--- Final Evaluation on Test Set ---")
-    model.load_state_dict(torch.load('best_model.pth', weights_only=True))
+    model.load_state_dict(torch.load('best_model_stf.pth', weights_only=True))
     # Pass test_graphs to align explanations with the correct original data
     test_metrics, true_labels, pred_labels, final_explanations = test(model, test_loader, test_graphs)
     logging.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}, "

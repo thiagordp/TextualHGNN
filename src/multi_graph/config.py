@@ -19,6 +19,7 @@ class TrainingConfig:
     PATIENCE: int = 25
     # A small value is recommended to start, e.g., 0.005
     ENTROPY_WEIGHT: float = 0.005
+    FORCE_TRAINING: bool = True
 
 
 from dataclasses import dataclass, field
@@ -43,7 +44,7 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 5000
+    SAMPLES_PER_CLASS: int = 25
 
     # SPACY_MODEL: str = 'en_core_web_lg'
     SPACY_MODEL: str = 'pt_core_news_lg'
@@ -56,12 +57,13 @@ class DataConfig:
 
     EMBEDDING_MODEL: str = 'cnmoro/bert-tiny-embeddings-english-portuguese'
     SIMILARITY_THRESHOLD: float = 0.998
+
+    FORCE_PREPROCESSING:bool = True
     # EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
 
 
 @dataclass
 class VisualizationConfig:
-
     VISUALIZATION_FOLDER = "data/graph_visualizations"
 
 # Dependency labels are a core part of the graph definition

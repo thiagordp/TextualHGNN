@@ -1,5 +1,6 @@
 # graph_builder.py
 import logging
+from pathlib import Path
 from typing import List
 
 import networkx as nx
@@ -96,10 +97,10 @@ class DocumentGraphBuilder:
         logging.info("---------------------------------")
 
     # --- NEW: Public method to display aggregated statistics ---
-    def display_graph_statistics(self):
+    def display_graph_statistics(self, output_filepath: Path):
         """
         Calculates and logs the median and standard deviation of graph structural properties
-        across all documents processed.
+        across all documents processed. Saves the raw data to a specified Excel file.
         """
         if not self.graph_stats:
             logging.warning("No graph statistics were collected. Cannot display.")
@@ -111,7 +112,10 @@ class DocumentGraphBuilder:
         print(df.describe().to_string())
         logging.info("--------------------------------\n")
 
-        df.to_excel("data/graph_statistics.xlsx", index=False)
+        # Ensure the parent directory exists
+        output_filepath.parent.mkdir(parents=True, exist_ok=True)
+        df.to_excel(output_filepath, index=False)
+        logging.info(f"Saved detailed graph statistics to '{output_filepath}'")
 
     def _get_batch_embedding(self, texts: list[str]) -> torch.Tensor:
         """Generates embeddings for a batch of texts."""
