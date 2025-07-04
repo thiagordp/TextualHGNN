@@ -44,7 +44,7 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 25
+    SAMPLES_PER_CLASS: int = 2500
 
     # SPACY_MODEL: str = 'en_core_web_lg'
     SPACY_MODEL: str = 'pt_core_news_lg'
@@ -56,9 +56,9 @@ class DataConfig:
     # EMBEDDING_MODEL: str = 'rufimelo/Legal-BERTimbau-base'
 
     EMBEDDING_MODEL: str = 'cnmoro/bert-tiny-embeddings-english-portuguese'
-    SIMILARITY_THRESHOLD: float = 0.998
+    SIMILARITY_THRESHOLD: float = 0.995
 
-    FORCE_PREPROCESSING:bool = True
+    FORCE_PREPROCESSING:bool = False
     # EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
 
 

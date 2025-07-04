@@ -183,7 +183,6 @@ def log_model_summary(model: torch.nn.Module):
     logging.info(f"Model Initialized. Trainable Parameters: {trainable_params:,}")
 
 
-# --- NEW: Function to save detailed per-prediction results ---
 def save_detailed_predictions_to_csv(filepath: Path, detailed_results: list):
     """Saves the detailed per-prediction results to a CSV file."""
     if not detailed_results:
@@ -223,7 +222,7 @@ def run():
         model_cfg.OUT_CHANNELS = len(class_names)
         logging.info("Successfully loaded data from cache.")
     else:
-        logging.info("No cached data found. Starting full preprocessing and graph building pipeline.")
+        logging.info("No cached data found or FORCE_PREPROCESSING is True. Starting memory-efficient pipeline.")
         # --- Load and Preprocess Data From Disk (if no cache) ---
         raw_docs_by_class = load_documents_from_disk(
             data_cfg.BASE_DATA_PATH,
