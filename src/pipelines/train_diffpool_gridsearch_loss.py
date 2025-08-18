@@ -85,7 +85,7 @@ def generate_loss_configs(sample_size=300, seed=42):
     return full_grid
 
 
-LOSS_CONFIG_GRID = generate_loss_configs(sample_size=1000)
+LOSS_CONFIG_GRID = generate_loss_configs(sample_size=100)
 
 # LANG = "italian"
 # LANG = "english"

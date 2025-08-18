@@ -39,7 +39,7 @@ from typing import Callable, Optional, List, Dict, Any
 
 import torch
 from networkx.classes import MultiDiGraph
-from networkx.classes.reportviews import DiMultiDegreeView
+from networkx.classes.reportviews import DiMultiDegreeView, OutMultiEdgeView
 from sklearn.preprocessing import LabelEncoder
 from torch_geometric.data import OnDiskDataset, Data
 from torch_geometric.data.data import BaseData
@@ -48,7 +48,7 @@ from tqdm import tqdm
 
 from src.data.text_graph_dataset_parsers import Text2DP, Text2GraphDataset
 from networkx.classes.coreviews import MultiAdjacencyView
-torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView, MultiAdjacencyView])
+torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView, MultiAdjacencyView, OutMultiEdgeView])
 
 import logging
 import time

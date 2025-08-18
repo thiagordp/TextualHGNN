@@ -10,7 +10,7 @@ import torch_geometric.transforms as T
 import torch.nn.functional as F
 from sklearn.metrics import classification_report, f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.data import DataLoader
 from torch_geometric.loader import DenseDataLoader
@@ -350,7 +350,7 @@ def train(
         data = data.to(device)
         optimizer.zero_grad()
 
-        with autocast(enabled=torch.cuda.is_available()):
+        with autocast(enabled=torch.cuda.is_available(), device_type=str(device)):
             model_outputs = model(data.x, data.adj, data.mask, debug=True)
             logits, obj1, obj2, g_layer1, g_layer2, s = model_outputs
 
@@ -469,7 +469,7 @@ def test(model, loader, loss_fn, device, verbose=True):
 
     # Calculate evaluation metrics
     accuracy = total_correct / len(loader.dataset)
-    macro_f1 = f1_score(true_labels, pred_labels, average='macro')
+    macro_f1 = f1_score(true_labels, pred_labels, average='macro', zero_division=0.0)
     average_loss = total_loss / len(loader.dataset)
 
     cr = classification_report(true_labels, pred_labels, output_dict=True)
@@ -632,7 +632,8 @@ def evaluate_model(model, loader, loss_fn, dataset_name, device):
         pred_labels,
         target_names=[str(i) for i in range(len(set(true_labels)))],
         digits=4,
-        output_dict=True
+        output_dict=True,
+        zero_division=0.0
     )
     logging.info(f"\n{dataset_name} Classification Report:\n{json.dumps(report, indent=3)}")
 

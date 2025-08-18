@@ -16,8 +16,6 @@ import logging
 from graphviz import Digraph
 
 
-
-
 def retrieve_bert_embeddings(embeddings_tokenizer, embeddings_model, target_text: str, device: str) -> np.array:
     """
     Generate embeddings for a given input text using a provided embeddings model and tokenizer.
@@ -62,82 +60,89 @@ def retrieve_text_embeddings(text_embedding, target_text: str, device: torch.dev
     return text_embedding.retrieve_embeddings(target_text).to(device)
 
 
-def add_new_relation_to_graph(target_graph: nx.MultiDiGraph, node_1: str, node_2: str, edge: str,
-                              text_embedding, device: torch.device | str, max_num_nodes: int = 1000):
+def _preprocess_labels(target: str) -> str:
     """
-    Add a new relation between two nodes in the graph, using text embeddings as node and edge features.
+    Preprocess the input label by removing specific unwanted characters and normalizing.
 
     Args:
-        target_graph (nx.MultiDiGraph): The graph to which the new relation is to be added.
-        node_1 (str): The first node (as text).
-        node_2 (str): The second node (as text).
-        edge (str): The relationship or edge label (as text).
-        text_embedding (TextEmbedding): An instance of the TextEmbedding class for embedding retrieval.
-        device (torch.device | str): The device to which embeddings should be moved.
+        target (str): The label to preprocess.
 
     Returns:
-        None
+        str: The preprocessed label.
     """
+    if not isinstance(target, str):
+        return ""
+    # Define unwanted characters
+    remove_chars = r"[]:;,/|\\_º.'º^©°'\""
+    # Remove unwanted characters and unicode zero-width spaces
+    target = re.sub(f"[{re.escape(remove_chars)}]", " ", target)
+    target = re.sub(r'[\u200B-\u200D\uFEFF]', '', target)
+    # Normalize whitespace and convert to lowercase
+    return re.sub(r'\s+', ' ', target).strip().lower()
 
-    def _preprocess_labels(target: str) -> str:
-        """
-        Preprocess the input label by removing specific unwanted characters.
 
-        Args:
-            target (str): The label to preprocess.
+def add_new_relation_to_graph(
+    target_graph: nx.MultiDiGraph,
+    node_1_lemma: str,
+    node_1_pos: str,  # NEW: POS tag for the first node
+    node_2_lemma: str,
+    node_2_pos: str,  # NEW: POS tag for the second node
+    edge: str,
+    text_embedding,
+    device: torch.device | str,
+    max_num_nodes: int = 1000
+):
+    """
+    Adds a relation to the graph, using a composite (lemma::pos) ID for nodes.
 
-        Returns:
-            str: The preprocessed label with unwanted characters removed.
-        """
-        # Define unwanted characters in a regex-friendly way.
-        remove_chars = r"[]:;,/|\\_º.'º^©°'\""
-
-        # Remove unwanted characters and replace them with a space
-        target = re.sub(f"[{re.escape(remove_chars)}]", " ", target)
-
-        target = re.sub(r'[\u200B-\u200D\uFEFF]', '', target)
-
-        # Normalize whitespace by stripping and replacing multiple spaces with a single space
-        target = re.sub(r'\s+', ' ', target).strip()
-
-        return target
-
-    # Preprocess the node and edge labels.
-    node_1 = _preprocess_labels(node_1)
-    node_2 = _preprocess_labels(node_2)
+    Nodes are unique for each lemma-POS pair. Embeddings are based on the lemma.
+    """
+    # 1. Preprocess inputs
+    node_1_lemma = _preprocess_labels(node_1_lemma)
+    node_2_lemma = _preprocess_labels(node_2_lemma)
     edge = _preprocess_labels(edge)
 
-    # Check if the node and edge labels are valid.
-    if check_extracted_info(node_1, node_2, edge):
+    if not check_extracted_info(node_1_lemma, node_2_lemma, edge):
+        return
 
-        # Only add new nodes if the maximum has not been achieved yet.
-        if target_graph.number_of_nodes() + 2 <= max_num_nodes*1000:
+    # 2. Create unique composite identifiers for nodes
+    node_1_id = f"{node_1_lemma}::{node_1_pos}"
+    node_2_id = f"{node_2_lemma}::{node_2_pos}"
 
-            # Add nodes to the graph if they don't already exist.
-            if not target_graph.has_node(node_1):
-                target_graph.add_node(node_1)
-            if not target_graph.has_node(node_2):
-                target_graph.add_node(node_2)
+    # 3. Add nodes with embeddings if they are new
+    nodes_to_process = [
+        {'id': node_1_id, 'lemma': node_1_lemma, 'pos': node_1_pos},
+        {'id': node_2_id, 'lemma': node_2_lemma, 'pos': node_2_pos},
+    ]
 
-            # Generate embeddings for the nodes and edge.
-            node_1_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-                                                         target_text=node_1,
-                                                         device=device)
-            node_2_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-                                                         target_text=node_2,
-                                                         device=device)
-            # edge_embeddings = retrieve_text_embeddings(text_embedding=text_embedding,
-            #                                            target_text=edge,
-            #                                            device=device)
+    for node_info in nodes_to_process:
+        node_id = node_info['id']
+        if not target_graph.has_node(node_id):
+            if target_graph.number_of_nodes() >= max_num_nodes:
+                logging.warning(
+                    f"Cannot add new node '{node_id}'. Graph capacity of {max_num_nodes} reached."
+                )
+                return
 
-            # Add the nodes with their embeddings to the graph.
-            target_graph.add_node(node_1, x=node_1_embeddings)
-            target_graph.add_node(node_2, x=node_2_embeddings)
-        else:
-            logging.warning(f"Skipping adding nodes {node_1} and {node_2} due to maximum number of nodes has been achieved ({max_num_nodes}).")
+            # Retrieve embedding using the lemma for semantic meaning
+            node_embedding = retrieve_text_embeddings(
+                text_embedding=text_embedding,
+                target_text=node_info['lemma'],
+                device=device
+            )
 
-        if target_graph.has_node(node_1) and target_graph.has_node(node_2):
-            target_graph.add_edge(node_1, node_2, label=edge)
+            # Add the node using its unique ID and store attributes
+            target_graph.add_node(
+                node_id,
+                x=node_embedding,
+                lemma=node_info['lemma'],
+                pos=node_info['pos'] # NEW: Store the POS tag as an attribute
+            )
+
+    # 4. Add the edge between the unique nodes
+    if target_graph.has_node(node_1_id) and target_graph.has_node(node_2_id):
+        target_graph.add_edge(node_1_id, node_2_id, label=edge)
+
 
 
 def log_corpus_oov_statistics(unk_vocab: dict, vocab: dict) -> None:
@@ -178,7 +183,6 @@ def log_corpus_oov_statistics(unk_vocab: dict, vocab: dict) -> None:
     # Log the data with structured formatting
     logging.info("---- UNK Stats ----")
     logging.info(f"\n{json.dumps(log_data, indent=4)}")
-
 
 
 def check_extracted_info(node_1: str, node_2: str, edge: str) -> bool:

@@ -360,12 +360,12 @@ class Text2DP(Text2Graph):
         """Add dependency parsing edges to the graph for valid tokens."""
         for token in doc:
             # ️ Ensure both token and its head are valid before adding the edge
-            if self._is_valid_token(token) and self._is_valid_token(token.head) and token.lemma_ != token.head.lemma_:
+            if self._is_valid_token(token) and self._is_valid_token(token.head) and token != token.head:
                 add_new_relation_to_graph(
                     target_graph=graph,
-                    node_1_lemma=token.head.lemma_,
+                    node_1_lemma=token.head.text,
                     node_1_pos=token.head.pos_,  # Pass the head's POS tag
-                    node_2_lemma=token.lemma_,
+                    node_2_lemma=token.text,
                     node_2_pos=token.pos_,  # Pass the token's POS tag
                     edge=token.dep_,
                     text_embedding=self.text_embedding,
