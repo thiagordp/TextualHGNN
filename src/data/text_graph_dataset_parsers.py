@@ -33,7 +33,7 @@ from tqdm import tqdm
 from transformers import BertTokenizer, BertModel
 from transformers.models.bert.modeling_bert import BertEmbeddings
 
-from src.data.text_preprocessing import preprocessing_legal_pt
+from src.data.preprocessing import preprocessing_legal_pt
 from src.data.utils import add_new_relation_to_graph
 import nltk
 from nltk.tokenize import WordPunctTokenizer

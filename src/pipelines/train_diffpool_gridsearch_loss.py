@@ -7,7 +7,7 @@ import torch
 import tqdm
 from torch import nn
 import json
-import random 
+import random
 
 from src.models.graph_classification.train_and_evaluate import load_datasets, initialize_model, calculate_class_weights, \
     train_and_validate, create_loaders, test
@@ -27,20 +27,28 @@ PARAMS_GRIDSEARCH = {
         'BATCH_SIZE': [4],
         'SOFTMAX_ASSIGN': [True],
         "DECREASE_PROPORTION": [0.05]
+    },
+    "portuguese": {
+        'LR': [0.00001],
+        'INNER_DIM': [32],
+        'BATCH_SIZE': [64],
+        'SOFTMAX_ASSIGN': [True],
+        "DECREASE_PROPORTION": [0.1]
     }
 }
 
 import itertools
 import random
 
+
 def generate_loss_configs(sample_size=300, seed=42):
     magnitudes = [1e-2, 1e-1, 1e0, 1e1]
 
-    full_grid = [      ]
+    full_grid = []
     i = 0
     for entropy, link, recon, contrast, balance, repel in itertools.product(magnitudes, repeat=6):
         config = {
-            "id": f"cfg_{i+1:05d}",
+            "id": f"cfg_{i + 1:05d}",
             "link": entropy * 100,
             "entropy": link,
             "reconstruction": recon,
@@ -54,10 +62,12 @@ def generate_loss_configs(sample_size=300, seed=42):
     # Random subset
     if len(full_grid) > sample_size:
         random.seed(seed)
-        sampled_grid = random.sample(full_grid, k=sample_size-1)
+        sampled_grid = random.sample(full_grid, k=sample_size - 1)
+
+        # TODO: check duplicated ids.
 
         sampled_grid.append({
-            "id": f"cfg_00000",
+            "id": f"cfg_{0:05d}",
             "link": 0,
             "entropy": 0,
             "reconstruction": 0.0,
@@ -75,10 +85,11 @@ def generate_loss_configs(sample_size=300, seed=42):
     return full_grid
 
 
-LOSS_CONFIG_GRID = generate_loss_configs(sample_size=200)
+LOSS_CONFIG_GRID = generate_loss_configs(sample_size=1000)
 
-#LANG = "italian"
-LANG = "english"
+# LANG = "italian"
+# LANG = "english"
+LANG = "portuguese"
 PARAM_GRID = PARAMS_GRIDSEARCH[LANG]
 CONFIG = load_config(LANG, "src/utils/config.json")
 
@@ -206,7 +217,7 @@ def grid_search():
                 }
 
                 # Append all loss weights with consistent formatting
-                #for key in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
+                # for key in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
                 #    result_row[f"LOSS_{key.upper()}"] = loss_config.get(key, 0.0)
 
                 results.append(result_row)
