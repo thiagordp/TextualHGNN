@@ -5,11 +5,7 @@ import re
 import contractions
 import spacy
 
-# Load spaCy model once for efficiency
-nlp = spacy.load('en_core_web_lg')
-
-
-def preprocess_text(text: str) -> str:
+def preprocess_text(text: str, nlp) -> str:
     """
     A comprehensive text cleaning pipeline to normalize, clean, and standardize raw text
     before it is passed to the graph builder.

@@ -2,23 +2,25 @@
 # config.py
 
 from dataclasses import dataclass
-import os
+
+import torch
 
 
 @dataclass
 class ModelConfig:
     HIDDEN_CHANNELS: int = 64
     OUT_CHANNELS: int = 2
+    DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @dataclass
 class TrainingConfig:
     BATCH_SIZE: int = 1
-    LEARNING_RATE: float = 0.001
+    LEARNING_RATE: float = 0.0001
     EPOCHS: int = 150
-    PATIENCE: int = 25
+    PATIENCE: int = 50
     # A small value is recommended to start, e.g., 0.005
-    ENTROPY_WEIGHT: float = 0.005
+    ENTROPY_WEIGHT: float = 0.01
     FORCE_TRAINING: bool = True
 
 
@@ -32,6 +34,7 @@ class DataConfig:
     DATASET_NAME:str="STF_HC"
     # DATASET_NAME:str="IMDB"
     BASE_DATA_PATH: str =f"data/datasets/{DATASET_NAME}"
+    INTERIM_DATA_PATH: str = f"data/datasets/{DATASET_NAME}/interim"
 
     # # Use field(default_factory=...) for mutable defaults like dicts
     # CLASS_SUBDIRECTORIES: dict = field(default_factory=lambda: {
@@ -44,7 +47,7 @@ class DataConfig:
     })
 
     # For demonstration, limit the number of files per class
-    SAMPLES_PER_CLASS: int = 2500
+    SAMPLES_PER_CLASS: int = 5000
 
     # SPACY_MODEL: str = 'en_core_web_lg'
     SPACY_MODEL: str = 'pt_core_news_lg'
@@ -54,11 +57,14 @@ class DataConfig:
     # SIMILARITY_THRESHOLD: float = 0.99
 
     # EMBEDDING_MODEL: str = 'rufimelo/Legal-BERTimbau-base'
+    EMBEDDING_MODEL: str = 'neuralmind/bert-base-portuguese-cased'
 
-    EMBEDDING_MODEL: str = 'cnmoro/bert-tiny-embeddings-english-portuguese'
+
+
+    # EMBEDDING_MODEL: str = 'cnmoro/bert-tiny-embeddings-english-portuguese'
     SIMILARITY_THRESHOLD: float = 0.995
 
-    FORCE_PREPROCESSING:bool = False
+    FORCE_PREPROCESSING:bool = True
     # EMBEDDING_MODEL: str = 'sentence-transformers/LaBSE'
 
 

@@ -73,6 +73,7 @@ def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, o
     # logging.info(f"Successfully saved structural graph to {output_filename}.")
 
 
+
 def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, dep_label_map: dict,
                                  output_filename: str):
     """

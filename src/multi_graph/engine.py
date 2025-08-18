@@ -58,7 +58,7 @@ def train(model, train_loader, optimizer, criterion, entropy_weight: float = 0.0
     optimizer.zero_grad()
 
     for i, data in progress_bar:
-        data = data.to(device)
+        #data = data.to(device)
 
         # Forward pass
         out, (word_att, sent_att) = model(data)
@@ -120,7 +120,7 @@ def test(model, loader, full_graph_list_for_mapping, class_names: list):
     all_filenames = []
 
     for data in loader:
-        data = data.to(device)
+        #data = data.to(device)
 
         out, (word_att, sent_att) = model(data)
 

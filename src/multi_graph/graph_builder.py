@@ -71,9 +71,9 @@ class DocumentGraphBuilder:
     a validation and pruning step to ensure data integrity.
     """
 
-    def __init__(self, spacy_model: str, embedding_model: str, similarity_threshold: float):
+    def __init__(self, nlp_spacy_model, embedding_model: str, similarity_threshold: float):
         logging.info("Initializing DocumentGraphBuilder...")
-        self.nlp = spacy.load(spacy_model)
+        self.nlp = nlp_spacy_model
 
         if not self.nlp.has_pipe("split_on_semicolon"):
             self.nlp.add_pipe("split_on_semicolon", before="parser")
@@ -135,7 +135,6 @@ class DocumentGraphBuilder:
         progress_bar = tqdm(enumerate(documents), total=len(documents), desc="Building graphs")
 
         for i, (filename, doc_text) in progress_bar:
-            progress_bar.set_postfix_str(f"File: {filename.rjust(7)}", refresh=True)
             nx_graph, hetero_graph = self.build_graphs_for_document(doc_text, filename, doc_id=i)
             if hetero_graph.node_types:
                 valid_nx_graphs.append(nx_graph)

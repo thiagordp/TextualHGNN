@@ -9,6 +9,7 @@ import numpy as np
 import spacy
 import torch
 import tqdm
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
 from spacy import Language
@@ -21,6 +22,8 @@ from src.multi_graph.config import ModelConfig, TrainingConfig, DataConfig
 from src.multi_graph.data_preprocessing import preprocess_text, preprocessing_legal_pt
 from src.multi_graph.engine import train, test
 from src.multi_graph.graph_builder import DocumentGraphBuilder
+from src.multi_graph.main_stf_preprocessing import log_results_to_csv, save_detailed_predictions_to_csv, \
+    generate_attention_visualizations
 from src.multi_graph.model import ExplainableHierarchicalGNN
 from src.multi_graph.config import VisualizationConfig
 from src.multi_graph.visualization import visualize_structural_graph, visualize_learned_attentions
@@ -36,12 +39,13 @@ nltk.download('stopwords', quiet=True)
 
 # Generate timestamp
 timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
-log_filename = f"logs/multi-level-graph_{timestamp}.log"
+log_filename = f"logs/multi-level-graph_{Path(__file__).stem}_{timestamp}.log"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()]
+    handlers=[logging.FileHandler(log_filename), logging.StreamHandler()],
+    force=True
 )
 logging.info("Logging setup complete.")
 
@@ -70,7 +74,7 @@ def load_documents_from_disk(base_path_str: str, class_map: dict, samples_per_cl
 
         print(f"Loading from: {class_path}")
         file_paths = sorted(list(class_path.glob("*.txt")))
-        #random.shuffle(file_paths)  # Shuffle for random sampling
+        # random.shuffle(file_paths)  # Shuffle for random sampling
 
         docs_by_class[class_name] = []
         for file_path in tqdm.tqdm(file_paths[:samples_per_class], desc=f"Loading '{class_name}' files"):
@@ -82,6 +86,7 @@ def load_documents_from_disk(base_path_str: str, class_map: dict, samples_per_cl
                 logging.error(f"Could not read file {file_path}: {e}")
 
     return docs_by_class
+
 
 @Language.component("set_custom_boundaries_advanced")
 def set_custom_boundaries_advanced(doc):
@@ -118,6 +123,8 @@ def run():
     data_cfg = DataConfig()
     viz_cfg = VisualizationConfig()
 
+    timestamp_str = datetime.now().strftime("%Y.%m.%d-%H.%M.%S")
+
     # --- 2. Load and Preprocess Data From Disk ---
     raw_docs_by_class = load_documents_from_disk(
         data_cfg.BASE_DATA_PATH,
@@ -132,7 +139,6 @@ def run():
     nlp_pt = spacy.load(DataConfig.SPACY_MODEL)
     nlp_pt.add_pipe("set_custom_boundaries_advanced", before="parser")
 
-
     docs_by_class = {}
     for class_name, docs_with_filenames in raw_docs_by_class.items():
         cleaned_docs = [
@@ -143,7 +149,7 @@ def run():
 
     # --- 3. Build Graphs ---
     builder = DocumentGraphBuilder(
-        spacy_model=data_cfg.SPACY_MODEL,
+        nlp_spacy_model=nlp_pt,
         embedding_model=data_cfg.EMBEDDING_MODEL,
         similarity_threshold=data_cfg.SIMILARITY_THRESHOLD
     )
@@ -185,7 +191,11 @@ def run():
         all_labels.extend([class_idx] * len(processed_filenames))
         all_filenames.extend(processed_filenames)
 
-    builder.display_graph_statistics()
+    stats_dir = Path("results")
+    param_str = _create_param_string(data_cfg, model_cfg, train_cfg)
+    stats_filename = f"graph_stats_{param_str}_{timestamp_str}.xlsx"
+    stats_filepath = stats_dir / stats_filename
+    builder.display_graph_statistics(stats_filepath)
 
     # --- Assign the actual filename as the doc_id ---
     for i, graph in enumerate(all_hetero_graphs):
@@ -238,7 +248,12 @@ def run():
     best_val_f1 = 0
     patience_counter = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model= model.to(device)
+    # model= model.to(device)
+    model_param_str = _create_param_string(data_cfg, model_cfg, train_cfg)
+    model_filename = f"{model_param_str}.pth"
+    models_dir = Path("models")
+    models_dir.mkdir(exist_ok=True)
+    model_path = models_dir / model_filename
 
     for epoch in range(1, train_cfg.EPOCHS + 1):
         loss = train(
@@ -249,21 +264,18 @@ def run():
             entropy_weight=train_cfg.ENTROPY_WEIGHT
         )
 
-        val_metrics, _, _, _ = test(model, val_loader, val_graphs)
+        val_metrics, _, _, _, _, _ = test(model, val_loader, val_graphs, class_names=class_names)
 
-        if val_metrics['f1'] > best_val_f1:
-            best_val_f1 = val_metrics['f1']
-            torch.save(model.state_dict(), 'best_model.pth')
+        val_f1 = val_metrics.get('weighted_avg', {}).get('f1-score', 0)
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            torch.save(model.state_dict(), model_path)
             patience_counter = 0
         else:
             patience_counter += 1
 
-        logging.info(f"Epoch {epoch:02d}, "
-                     f"Loss: {loss:.4f}, "
-                     f"Val Acc:  {val_metrics['accuracy']:.4f}, "
-                     f"Val Prec: {val_metrics['precision']:.4f}, "
-                     f"Val Rec:  {val_metrics['recall']:.4f}, "
-                     f"Val F1:   {val_metrics['f1']:.4f}")
+        logging.info(
+            f"Epoch {epoch:02d}, Loss: {loss:.4f}, Val Acc: {val_metrics.get('accuracy', 0):.4f}, Val F1: {val_f1:.4f}")
 
         if patience_counter >= train_cfg.PATIENCE:
             logging.info(f"Early stopping at epoch {epoch}.")
@@ -271,47 +283,36 @@ def run():
 
     # --- 7. Final Evaluation and Explainability ---
     logging.info("\n--- Final Evaluation on Test Set ---")
-    model.load_state_dict(torch.load('best_model_stf.pth', weights_only=True))
+    model.load_state_dict(torch.load(model_path, weights_only=True))
     # Pass test_graphs to align explanations with the correct original data
-    test_metrics, true_labels, pred_labels, final_explanations = test(model, test_loader, test_graphs)
-    logging.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}, "
-                 f"Precision={test_metrics['precision']:.4f}, "
-                 f"Recall={test_metrics['recall']:.4f}, "
-                 f"F1-Score: {test_metrics['f1']:.4f}")
+    test_metrics, true_labels, pred_labels, final_explanations, detailed_results, _ = test(model, test_loader,
+                                                                                           test_graphs,
+                                                                                           class_names=class_names)
+    logging.info(f"Test Accuracy: {test_metrics.get('accuracy', 'N/A'):.4f}")
+    logging.info(f"Test F1-Score (Weighted): {test_metrics.get('weighted_avg', {}).get('f1-score', 'N/A'):.4f}")
+    logging.info(f"Test ROC AUC Score: {test_metrics.get('roc_auc_score', 'N/A'):.4f}")
 
-    if final_explanations:
-        logging.info(f"\n--- Generating {len(final_explanations)} Explainability Visualizations ---")
-        output_viz_dir = Path(viz_cfg.VISUALIZATION_FOLDER) / data_cfg.DATASET_NAME
-        output_viz_dir.mkdir(parents=True, exist_ok=True)
+    full_report_text = classification_report(true_labels, pred_labels, target_names=class_names, zero_division=0)
+    logging.info(f"\nClassification Report:\n{full_report_text}")
+    cm = confusion_matrix(true_labels, pred_labels)
+    logging.info(f"\nConfusion Matrix:\n{cm}")
 
-        # Create the map from filename to its original nx_graph object once
-        nx_graph_map_for_viz = {g.graph['filename']: g for g in test_nx_graphs}
+    results_csv_path = Path("results") / "training_log.csv"
+    log_results_to_csv(results_csv_path, test_metrics, data_cfg, model_cfg, train_cfg)
 
-        # Use tqdm for a progress bar
-        for explanation in tqdm.tqdm(final_explanations, desc="Generating Explainability Visualizations"):
-            doc_filename = explanation['doc_id']
-            original_nx_graph = nx_graph_map_for_viz.get(doc_filename)
+    predictions_csv_path = Path("results") / f"predictions_{model_param_str}_{timestamp_str}.xlsx"
+    save_detailed_predictions_to_csv(predictions_csv_path, detailed_results)
 
-            if original_nx_graph:
-                # Log the prediction details for the current file
-                # logging.info(f"Analyzing Doc: {doc_filename} | "
-                #              f"Predicted: '{class_names[explanation['prediction']]}' | "
-                #              f"Actual: '{class_names[explanation['actual']]}'")
-
-                output_html_path = output_viz_dir / f"{Path(doc_filename).stem}_learned_attention_entropy.html"
-
-                # Call the visualization function for the current explanation
-                visualize_learned_attentions(
-                    nx_graph=original_nx_graph,
-                    explanation=explanation,
-                    dep_label_map=builder.dep_label_map,
-                    output_filename=str(output_html_path)
-                )
-            else:
-                logging.warning(f"Could not find original NetworkX graph for doc_id: {doc_filename} to visualize.")
-    else:
-        logging.warning("No explanations were generated, skipping visualization.")
-
+    generate_attention_visualizations(
+        explanations=final_explanations,
+        nx_graphs=test_nx_graphs,
+        class_names=class_names,
+        viz_cfg=viz_cfg,
+        data_cfg=data_cfg,
+        model_param_str=model_param_str,
+        run_timestamp=timestamp_str,
+        builder=builder
+    )
 
 if __name__ == '__main__':
     run()
