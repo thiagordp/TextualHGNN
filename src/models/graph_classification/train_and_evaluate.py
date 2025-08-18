@@ -546,6 +546,8 @@ def train_and_validate(model, train_loader, val_loader,
         # In the context of combining F1 score and Completeness, this mean ensures that both metrics are balanced, 
         # and a low value in one cannot be compensated by a high value in the other.
         # Simple mean: hybrid_score = 0.5 * val_macro_f1 + 0.5 * avg_completeness
+        # TODO: pensar um pouco melhor no hybrid score.
+
         if val_macro_f1 + avg_completeness > 0:
             hybrid_score = 2 * val_macro_f1 * avg_completeness / (val_macro_f1 + avg_completeness)
         else:
