@@ -23,17 +23,17 @@ PARAMS_GRIDSEARCH = {
     },
     "italian": {
         'LR': [0.0001],
-        'INNER_DIM': [16],
+        'INNER_DIM': [32],
         'BATCH_SIZE': [4],
         'SOFTMAX_ASSIGN': [True],
         "DECREASE_PROPORTION": [0.05]
     },
     "portuguese": {
-        'LR': [0.00001],
+        'LR': [0.0001],
         'INNER_DIM': [32],
-        'BATCH_SIZE': [64],
+        'BATCH_SIZE': [4],
         'SOFTMAX_ASSIGN': [True],
-        "DECREASE_PROPORTION": [0.1]
+        "DECREASE_PROPORTION": [0.05]
     }
 }
 
