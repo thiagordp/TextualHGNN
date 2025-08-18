@@ -47,8 +47,8 @@ from torch_geometric.utils import from_networkx
 from tqdm import tqdm
 
 from src.data.text_graph_dataset_parsers import Text2DP, Text2GraphDataset
-
-torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView])
+from networkx.classes.coreviews import MultiAdjacencyView
+torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView, MultiAdjacencyView])
 
 import logging
 import time

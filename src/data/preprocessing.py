@@ -1,0 +1,163 @@
+import re
+import spacy
+
+
+def preprocessing_legal_pt(text: str, nlp_spacy):
+    """
+    Realiza o pré-processamento de documentos jurídicos em português.
+
+    Esta função executa uma série de etapas de limpeza e normalização
+    adaptadas às características de textos jurídicos em português.
+
+    A pipeline é a seguinte:
+    0.  Isola a seção do relatório, truncando o texto após a última
+        ocorrência de "É o relatório.".
+    1.  Remove padrões comuns de cabeçalho e rodapé.
+    2.  Une linhas que foram quebradas durante a extração de texto (ex: de PDFs).
+    3.  Remove blocos de ruído específicos, como os de autenticação de documentos.
+    4.  Substitui caracteres especiais, símbolos, URLs e expande abreviações/contrações
+        comuns (ex: 'nº' e suas variações -> 'número', 'à' -> 'para a').
+    5.  Expande números ordinais (ex: '1º', '2ª') para palavras completas ('primeiro', 'segunda').
+    6.  Padroniza referências jurídicas comuns (ex: 'Art. 99' -> 'ARTIGO_99').
+    7.  Usa o spaCy para tokenizar, normalizar (lematizar) e realizar o processamento linguístico.
+    8.  Executa uma limpeza cosmética final no espaçamento.
+
+    Args:
+        text: Uma string contendo o documento jurídico em português.
+        nlp_spacy: Um modelo spaCy carregado para a língua portuguesa.
+
+    Returns:
+        O texto pré-processado como uma única string.
+    """
+
+    def _replace_special_chars_pt(target: str) -> str:
+        """
+        Executa normalização de caracteres e remoção de ruídos com alta confiança.
+        Inclui a expansão de abreviações e contrações comuns em português.
+        """
+        # 1. Padroniza pontuação e remove caracteres de ruído
+        target = target.replace('–', '-').replace('—', '-').replace('―', '-')
+        target = target.replace('“', '"').replace('”', '"').replace('‘', "'").replace('’', "'")
+        target = target.replace('…', '...').replace('•', '').replace('·', '')
+        target = target.replace('\ufeff', '')  # Remove o caractere BOM invisível
+
+        # 2. Expande contrações
+        target = re.sub(r'\bà\b', 'para a', target, flags=re.IGNORECASE)
+        target = re.sub(r'\bàs\b', 'para as', target, flags=re.IGNORECASE)
+
+        # 3. Expande a abreviação "número" com uma abordagem segura de duas etapas
+        # Etapa 3.1: Substitui casos inequívocos que NUNCA são preposições.
+        # Trata n°, n.°, nº, n.º, n0, n.0
+        target = re.sub(r'\bn\.?[º°0]\b', 'número', target, flags=re.IGNORECASE)
+
+        # Etapa 3.2: Substitui o ambíguo "no" ou "n.o" APENAS se seguido por um dígito.
+        # Usa um "positive lookahead" (?=\s*\d) para verificar o dígito sem consumi-lo.
+        target = re.sub(r'\bn\.?o\b(?=\s*\d)', 'número', target, flags=re.IGNORECASE)
+
+        # 4. Padroniza URLs
+        target = re.sub(r'https?://\S+|www\.\S+', '[URL]', target)
+
+        return target
+
+    def _expand_ordinals_pt(target: str) -> str:
+        """Expande números ordinais para palavras completas (ex: '1º' -> 'primeiro')."""
+        ordinal_map = {
+            1: "primeir", 2: "segund", 3: "terceir", 4: "quart",
+            5: "quint", 6: "sext", 7: "sétim", 8: "oitav",
+            9: "non", 10: "décim"
+        }
+
+        def _replacer(match):
+            num_str, indicator = match.group(1), match.group(2).lower()
+            num = int(num_str)
+            stem = ordinal_map.get(num)
+            if not stem: return match.group(0)
+            if indicator in ['o', 'º']: return stem + 'o'
+            if indicator in ['a', 'ª']: return stem + 'a'
+            return match.group(0)
+
+        pattern = re.compile(r'\b(\d+)([ºªoa])\b', re.IGNORECASE)
+        return pattern.sub(_replacer, target)
+
+    def _standardize_legal_entities_v2(target: str) -> str:
+        """Padroniza entidades jurídicas como Artigos, lidando com intervalos e listas."""
+        target = target.replace('§', 'paragrafo')
+        keyword, keywords_plural = "artigo", "artigos"
+
+        def expand_range(match):
+            start, end = int(match.group(1)), int(match.group(2))
+            return ', '.join([f"{keyword.upper()}_{num}" for num in range(start, end + 1)])
+
+        target = re.sub(fr'\b{keywords_plural}\s+(\d+)\s+a\s+(\d+)\b', expand_range, target, flags=re.IGNORECASE)
+
+        def expand_list(match):
+            numbers = re.findall(r'\d+', match.group(1))
+            return ', '.join([f"{keyword.upper()}_{num}" for num in numbers])
+
+        target = re.sub(fr'\b{keywords_plural}\s+((?:\d+,\s*)*\d+\s+e\s+\d+)\b', expand_list, target,
+                        flags=re.IGNORECASE)
+        target = re.sub(fr'\b({keyword})\.?\s*([\d./-]+)\b',
+                        lambda m: f"{m.group(1).upper().replace('.', '')}_{m.group(2).replace('.', '')}", target,
+                        flags=re.IGNORECASE)
+        return target
+
+    def __isolate_report_section(target: str) -> str:
+        """Isola o texto até a última ocorrência de 'É o relatório.'."""
+        matches = list(re.finditer(r'\bÉ o relatório\.?\b', target, re.IGNORECASE | re.DOTALL))
+        if matches: return target[:matches[-1].end()]
+        return target
+
+    def _join_broken_lines(target: str) -> str:
+        """Une linhas que foram quebradas incorretamente."""
+        lines, reconstructed_lines, buffer = target.split('\n'), [], ""
+        for line in lines:
+            stripped_line = line.strip()
+            if not stripped_line: continue
+            if buffer and not buffer.endswith(('.', '!', '?', ';', ':')):
+                buffer += " " + stripped_line
+            else:
+                if buffer: reconstructed_lines.append(buffer)
+                buffer = stripped_line
+        if buffer: reconstructed_lines.append(buffer)
+        return "\n".join(reconstructed_lines)
+
+    def __remove_authentication_block(target: str) -> str:
+        """Remove o bloco de autenticação de documentos do STF."""
+        return re.sub(r'https?://www\.stf\.jus\.br/portal/autenticacao/.*', '', target, flags=re.IGNORECASE | re.DOTALL)
+
+    def __remove_noise_patterns(target: str) -> str:
+        """Remove linhas inteiras que correspondem a padrões de ruído (cabeçalhos, etc.)."""
+        noise_patterns = [
+            re.compile(r'^\s*(HC|REsp|AgRg)\s+[\d.-]+\s*/\s*\w{2}\s*$', re.IGNORECASE),
+            re.compile(r'^\s*(página|pag|fls)\.?\s*\d+(\s*de\s*\d+)?\s*$', re.IGNORECASE),
+            re.compile(r'^\s*(RELATÓRIO|VOTO|EMENTA|ACÓRDÃO|DECISÃO)\s*$', re.IGNORECASE),
+            re.compile(r'^\s*\d{2}/\d{2}/\d{4}\s+(PRIMEIRA|SEGUNDA)\s+(TURMA|C[ÂA]MARA)\s*$', re.IGNORECASE),
+            re.compile(r'^\s*(PRIMEIRA|SEGUNDA)\s+(TURMA|C[ÂA]MARA)\s*$', re.IGNORECASE),
+        ]
+        return "\n".join([line for line in target.split('\n') if
+                          line.strip() and not any(p.fullmatch(line.strip()) for p in noise_patterns)])
+
+    def tokenize_and_normalize_spacy(target: str, nlp_spacy) -> str:
+        """Usa spaCy para tokenização, normalização e preservação de entidades/propns."""
+        doc, processed_tokens = nlp_spacy(target), []
+        for token in doc:
+            if '_' in token.text or token.pos_ == "PROPN" or token.text == '[URL]':
+                processed_tokens.append(token.text_with_ws)
+            else:
+                processed_tokens.append(token.text_with_ws.lower())
+        final_text = "".join(processed_tokens)
+        final_text = re.sub(r'\s+', ' ', final_text).strip()
+        return re.sub(r'\s([.,;:])', r'\1', final_text)
+
+    # --- PIPELINE DE EXECUÇÃO ---
+    text = __isolate_report_section(text)
+    text = __remove_noise_patterns(text)
+    text = _join_broken_lines(text)
+    text = __remove_authentication_block(text)
+    text = _replace_special_chars_pt(text)
+    text = _expand_ordinals_pt(text)
+    text = _standardize_legal_entities_v2(text)
+    #text = tokenize_and_normalize_spacy(text, nlp_spacy)
+
+    return text
+
