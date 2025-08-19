@@ -30,6 +30,27 @@ def preprocessing_legal_pt(text: str, nlp_spacy):
         O texto pré-processado como uma única string.
     """
 
+    def __remove_icp_brasil_footer(target: str) -> str:
+        """
+        Remove o bloco de texto da assinatura digital ICP-Brasil e seus resíduos.
+        Atua em dois estágios para garantir a limpeza completa.
+        """
+        # Estágio 1: Remove o bloco principal, da "Infraestrutura" até o primeiro
+        # "ICP-Brasil". A expressão é flexível para lidar com texto concatenado.
+        # Usamos re.DOTALL para garantir que funcione mesmo que a junção de linhas falhe.
+        main_pattern = re.compile(
+            r"Infraestrutura\s+de.*?ICP-Brasil\.?",
+            re.IGNORECASE | re.DOTALL
+        )
+        target = main_pattern.sub('', target)
+
+        # Estágio 2: Remove o resíduo específico "ICP-Brasil.OO" que pode ter
+        # sobrado após a primeira remoção.
+        remnant_pattern = re.compile(r"ICP-Brasil\.OO", re.IGNORECASE)
+        target = remnant_pattern.sub('', target)
+
+        return target
+
     def _replace_special_chars_pt(target: str) -> str:
         """
         Executa normalização de caracteres e remoção de ruídos com alta confiança.
@@ -121,6 +142,28 @@ def preprocessing_legal_pt(text: str, nlp_spacy):
         if buffer: reconstructed_lines.append(buffer)
         return "\n".join(reconstructed_lines)
 
+    def __remove_line_noise(target: str) -> str:
+        """
+        Remove linhas inteiras que contêm padrões de ruído de rodapé.
+        Executar ANTES de _join_broken_lines para evitar a concatenação
+        incorreta de ruído com texto legítimo.
+        """
+        # Palavras-chave que, se presentes, marcam a linha inteira como ruído.
+        noise_keywords = [
+            'ICP-Brasil',
+            'Infraestrutura de',
+            'deChaves',
+            'ChavesPúblicas',
+            'PúblicasBrasileira',
+            'stf.jus.br/portal/autenticacao/'
+        ]
+
+        lines = target.split('\n')
+        # Mantém apenas as linhas que NÃO contêm nenhuma das palavras-chave de ruído.
+        clean_lines = [line for line in lines if not any(keyword in line for keyword in noise_keywords)]
+
+        return "\n".join(clean_lines)
+
     def __remove_authentication_block(target: str) -> str:
         """Remove o bloco de autenticação de documentos do STF."""
         return re.sub(r'https?://www\.stf\.jus\.br/portal/autenticacao/.*', '', target, flags=re.IGNORECASE | re.DOTALL)
@@ -137,7 +180,7 @@ def preprocessing_legal_pt(text: str, nlp_spacy):
         return "\n".join([line for line in target.split('\n') if
                           line.strip() and not any(p.fullmatch(line.strip()) for p in noise_patterns)])
 
-    def tokenize_and_normalize_spacy(target: str, nlp_spacy) -> str:
+    def tokenize_and_normalize_spacy(target: str) -> str:
         """Usa spaCy para tokenização, normalização e preservação de entidades/propns."""
         doc, processed_tokens = nlp_spacy(target), []
         for token in doc:
@@ -152,12 +195,22 @@ def preprocessing_legal_pt(text: str, nlp_spacy):
     # --- PIPELINE DE EXECUÇÃO ---
     text = __isolate_report_section(text)
     text = __remove_noise_patterns(text)
+
+    # ORDEM CORRIGIDA E DEFINITIVA
+    # 1. Remove as linhas de ruído ANTES de qualquer outra coisa.
+    text = __remove_line_noise(text)
+
+    # 2. Agora, junta as linhas quebradas com segurança.
     text = _join_broken_lines(text)
-    text = __remove_authentication_block(text)
+
+    # 3. Executa o resto da limpeza.
     text = _replace_special_chars_pt(text)
     text = _expand_ordinals_pt(text)
     text = _standardize_legal_entities_v2(text)
-    #text = tokenize_and_normalize_spacy(text, nlp_spacy)
+
+    # Limpeza cosmética final para remover espaços em branco excessivos.
+    text = re.sub(r'\s{2,}', ' ', text).strip()
+    text = re.sub(r'(\n\s*)+\n', '\n\n', text).strip()
 
     return text
 

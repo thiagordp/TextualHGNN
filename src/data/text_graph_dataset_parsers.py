@@ -273,7 +273,9 @@ class Text2DP(Text2Graph):
             "ADP",  # Adposition (prepositions, postpositions)
             "SPACE",  # Whitespace
             "SYM",  # Symbol
-            "X"  # Other
+            "X",  # Other
+            "DET",
+            "CCONJ"
         }
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
