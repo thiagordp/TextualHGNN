@@ -32,7 +32,7 @@
     "ROOT": "data/datasets/IMDB"
   },
   "portuguese": {
-    "EPOCHS": 5,
+    "EPOCHS": 20,
     "PATIENCE": 20,
     "LR": 0.005,
     "LR_DECAY": 0,

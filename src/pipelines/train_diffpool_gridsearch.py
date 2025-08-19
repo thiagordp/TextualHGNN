@@ -28,11 +28,11 @@ PARAMS_GRIDSEARCH = {
         "DECREASE_PROPORTION": [0.05]
     },
     "portuguese": {
-        'LR': [1e-3],
+        'LR': [1e-3, 1e-4, 1e-5],
         'INNER_DIM': [16, 32, 64],
-        'BATCH_SIZE': [4],
+        'BATCH_SIZE': [2, 4, 8, 16, 32],
         'SOFTMAX_ASSIGN': [True],
-        "DECREASE_PROPORTION": [0.01, 0.05, 0.1]
+        "DECREASE_PROPORTION": [0.001, 0.01, 0.02, 0.05, 0.1]
     }
 }
 
@@ -107,6 +107,8 @@ def grid_search():
             lang=LANG
         )
 
+        input("Press Enter to continue...")
+
         train_loader, val_loader, test_loader = create_loaders(
             tgd_train,
             tgd_val,
@@ -169,6 +171,8 @@ def grid_search():
                 "VAL_MACRO_F1": val_macro_f1,
                 "VAL_ACC": val_acc,
                 "VAL_LOSS": val_loss,
+                "VAL_CONCEPT_COMP": avg_completeness,
+                "VAL_HYBRID_SCORE": hybrid_score,
                 "MODEL_PATH": best_model_path
             })
 
