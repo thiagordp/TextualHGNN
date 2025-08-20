@@ -209,7 +209,7 @@ class DiffPool(GNN):
         # x = self.gnn1_embed(x, adj, mask)
 
         if self.softmax_assign:
-            s = torch.softmax(s, dim=1)
+            s = torch.softmax(s, dim=-1)
 
         if debug:
             pass

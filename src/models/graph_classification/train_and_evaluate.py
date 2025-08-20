@@ -14,12 +14,16 @@ from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.data import DataLoader
 from torch_geometric.loader import DenseDataLoader
+from torch_geometric.utils import dense_to_sparse
 from tqdm import tqdm
+from torch_geometric.data import Data
+
 
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
 from src.models.graph_classification.gnn import DiffPool
 from src.models.graph_classification.utils import loss_config_to_tag
-from src.models.graph_explainability.cg_evaluation_metrics import ConceptCompletenessCalculatorV2
+from src.models.graph_explainability.cg_evaluation_metrics import  \
+    ConceptConformityCalculator, ModularityCalculator, SilhouetteScoreCalculator, ConceptCompletenessCalculator
 
 
 def calculate_class_weights(dataset: TextGraphDatasetOnDisk, device: torch.device) -> torch.Tensor:
@@ -476,43 +480,20 @@ def test(model, loader, loss_fn, device, verbose=True):
     return accuracy, macro_f1, true_labels, pred_labels, average_loss, cr
 
 
-# Training and Validation Loop
+# Replace the existing train_and_validate function with this one:
 def train_and_validate(model, train_loader, val_loader,
                        optimizer, loss_fn, patience, epochs, lr, hidden_dim, batch_size,
                        use_softmax, decrease_prop, dataset_name, device, timestamp, grid_search=False, verbose=True,
                        loss_config={}):
     """
-    Train and validate the model.
-
-    Args:
-        model: The GNN model to train.
-        train_loader: DataLoader for the training dataset.
-        val_loader: DataLoader for the validation dataset.
-        optimizer: Optimizer for training the model.
-        loss_fn: Loss function to use for training.
-        patience (int): Number of epochs to wait for improvement before early stopping.
-        epochs (int): Total number of epochs to train.
-        lr (float): Initial learning rate.
-        hidden_dim (int): Number of hidden dimensions.
-        batch_size (int): Batch size.
-        use_softmax (bool): If True, use softmax classification.
-        decrease_prop (float): Decrease learning rate by this amount.
-        verbose (bool): verbosity
-        grid_search (bool): Whether to use a grid search.
-        dataset_name (string): Name of the dataset.
-
-    Returns:
-        str: Path to the best model saved during training.
-
+    Train and validate the model, calculating a full suite of interpretability metrics.
     """
-    best_val_f1 = 0
-    best_hybrid = 0
-    best_epoch = 0
+    best_e_score = -1.0
     best_model_path = None
-    best_completeness = 0
+    best_epoch = 0
+    best_epoch_results = {}
     times = []
 
-    # timestamp = get_timestamp()
     loss_tag = loss_config_to_tag(loss_config)
     writer = SummaryWriter(
         f"runs/diffpool_{dataset_name}_{timestamp}_pat{patience}_ep{epochs}_lr{lr}_hd{hidden_dim}_bs{batch_size}_sm{use_softmax}_dp{decrease_prop}_{loss_tag}_gs{grid_search}"
@@ -521,75 +502,123 @@ def train_and_validate(model, train_loader, val_loader,
     for epoch in range(1, epochs + 1):
         start_time = time.time()
 
+        # --- TRAINING ---
         train_loss, train_acc = train(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            loss_fn=loss_fn,
-            return_acc=True,
-            verbose=verbose,
-            device=device,
-            loss_config=loss_config
+            model=model, loader=train_loader, optimizer=optimizer, loss_fn=loss_fn,
+            return_acc=True, verbose=False, device=device, loss_config=loss_config
         )
 
-        val_acc, val_macro_f1, val_y_true, val_y_pred, val_loss, cr_val = test(
-            model, val_loader, loss_fn, device=device, verbose=verbose
-        )
+        # --- VALIDATION & METRICS ---
+        model.eval()
+        all_preds, all_labels = [], []
 
-        completeness_calculator = ConceptCompletenessCalculatorV2(model, train_loader, val_loader, device)
-        completeness_scores = completeness_calculator.calculate_concept_completeness()
-        avg_completeness = sum(score for score, _ in completeness_scores) / len(completeness_scores)
+        # Initialize metric calculators for the epoch
+        completeness_calc = ConceptCompletenessCalculator()
+        conformity_calc = ConceptConformityCalculator()
+        modularity_calc = ModularityCalculator()
+        silhouette_calc = SilhouetteScoreCalculator()
 
-        # Harmonic Mean
-        # This formula is particularly sensitive to smaller values, 
-        # making it suitable when you want to penalize extreme discrepancies between the two inputs. 
-        # In the context of combining F1 score and Completeness, this mean ensures that both metrics are balanced, 
-        # and a low value in one cannot be compensated by a high value in the other.
-        # Simple mean: hybrid_score = 0.5 * val_macro_f1 + 0.5 * avg_completeness
-        # TODO: pensar um pouco melhor no hybrid score.
+        with torch.no_grad():
+            for data in val_loader:
+                data = data.to(device)
+                model_outputs = model(data.x, data.adj, data.mask, debug=True)
+                logits, _, _, _, _, (s01, s12) = model_outputs
+                pred = logits.max(dim=1)[1]
 
-        if val_macro_f1 + avg_completeness > 0:
-            hybrid_score = 2 * val_macro_f1 * avg_completeness / (val_macro_f1 + avg_completeness)
-        else:
-            hybrid_score = 0.0
+                all_preds.append(pred.cpu())
 
+                y_tensor = data.y
+                if isinstance(y_tensor, list):
+                    y_tensor = torch.tensor(y_tensor, device=device, dtype=torch.float)
+
+                # Convert one-hot labels to class indices
+                if y_tensor.ndim > 1 and y_tensor.shape[1] > 1:
+                    y_indices = y_tensor.argmax(dim=1)
+                else:
+                    y_indices = y_tensor.long()  # Ensure it's integer type
+
+                all_labels.append(y_indices.view(-1).cpu())
+
+                # Get concept assignments (we focus on the first layer for interpretability)
+                concept_ids_batch = s01.argmax(dim=-1)
+
+                # The 'batch' attribute maps each node to its graph in the batch
+                batch_vector = data.batch if hasattr(data, 'batch') else torch.zeros(s01.size(1), dtype=torch.long,
+                                                                                     device=device)
+                num_graphs_in_batch = data.x.size(0)
+
+                for i in range(num_graphs_in_batch):
+                    num_nodes = int(data.mask[i].sum())
+                    if num_nodes == 0: continue
+
+                    x_i = data.x[i, :num_nodes]
+                    adj_i = data.adj[i, :num_nodes, :num_nodes]
+
+                    # Ensure y_i is a tensor for the Data object
+                    y_val = data.y[i]
+                    if isinstance(y_val, list):
+                        # Handle case where y is a list of lists/tensors
+                        y_i = torch.tensor(y_val, device=device, dtype=torch.long)
+                    elif isinstance(y_val, (int, float)):
+                        # Handle case where y is a flat list of numbers
+                        y_i = torch.tensor([y_val], device=device, dtype=torch.long)
+                    else:  # It's already a tensor
+                        y_i = y_val
+
+                    edge_index_i = dense_to_sparse(adj_i)[0]
+                    single_graph_data = Data(x=x_i.clone(), edge_index=edge_index_i.clone(), y=y_i.clone())
+
+                    single_graph_concepts = concept_ids_batch[i, :num_nodes]
+
+                    completeness_calc.add_item(single_graph_data.y, single_graph_concepts)
+                    conformity_calc.add_item(single_graph_data, single_graph_concepts)
+                    modularity_calc.add_item(single_graph_data, single_graph_concepts)
+                    silhouette_calc.add_item(single_graph_data, single_graph_concepts)
+
+        # Calculate final metrics for the epoch
+        preds, labels = torch.cat(all_preds).numpy(), torch.cat(all_labels).numpy()
+
+        macro_f1 = f1_score(labels, preds, average='macro', zero_division=0)
+        completeness = completeness_calc.calculate()
+        conformity = conformity_calc.calculate()
+        modularity = modularity_calc.calculate()
+        silhouette = silhouette_calc.calculate()
+
+        # Calculate HI-Score and E-Score
+        hi_score = (completeness * conformity * modularity * silhouette) ** 0.25
+        e_score = (2 * macro_f1 * hi_score) / (macro_f1 + hi_score) if (macro_f1 + hi_score) > 0 else 0
+
+        # --- LOGGING ---
         writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Accuracy/train', train_acc, epoch)
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Accuracy/val', val_acc, epoch)
-        writer.add_scalar('ConceptCompleteness/val', avg_completeness, epoch)
-        writer.add_scalar('HybridScore/val', hybrid_score, epoch)
+        writer.add_scalar('F1/val', macro_f1, epoch)
+        writer.add_scalar('Metrics/Completeness', completeness, epoch)
+        writer.add_scalar('Metrics/Conformity', conformity, epoch)
+        writer.add_scalar('Metrics/Modularity', modularity, epoch)
+        writer.add_scalar('Metrics/Silhouette', silhouette, epoch)
+        writer.add_scalar('Overall/HI_Score', hi_score, epoch)
+        writer.add_scalar('Overall/E_Score', e_score, epoch)
 
-        logging.info(f'Epoch {epoch:03d} | Train Loss: {train_loss:.4f} | '
-                     f'Val Acc: {val_acc:.4f} | Val F1: {val_macro_f1:.4f} | '
-                     f'Completeness: {avg_completeness:.4f} | Hybrid: {hybrid_score:.4f}')
+        logging.info(
+            f'Epoch {epoch:03d} | F1: {macro_f1:.4f} | Comp: {completeness:.4f} | Conf: {conformity:.4f} | Mod: {modularity:.4f} | Sil: {silhouette:.4f} | E-Score: {e_score:.4f}')
 
-        if hybrid_score > best_hybrid:
-            best_val_f1 = val_macro_f1
-            best_completeness = avg_completeness
-            best_hybrid = hybrid_score
-            best_epoch = epoch
+        # --- MODEL CHECKPOINTING ---
+        if e_score > best_e_score:
+            best_e_score = e_score
+            best_epoch_results = {
+                "loss_config": loss_config, "best_epoch": epoch, "macro_f1": macro_f1,
+                "completeness": completeness, "conformity": conformity,
+                "modularity": modularity, "silhouette": silhouette,
+                "hi_score": hi_score, "e_score": e_score
+            }
 
             model_name = type(model).__name__
             path_prefix = "models/grid_search" if grid_search else "models"
-            model_dir = f"{path_prefix}/{dataset_name}/"
+            model_dir = os.path.join(path_prefix, dataset_name)
             os.makedirs(model_dir, exist_ok=True)
 
-            best_model_path = os.path.join(
-                model_dir,
-                f'{dataset_name}_{model_name}_{timestamp}_'
-                f'lr{lr}_hd{hidden_dim}_bs{batch_size}_'
-                f'softmax{use_softmax}_dp{decrease_prop}_'
-                f'{loss_tag}_f1{val_macro_f1:.4f}_comp{avg_completeness:.4f}_hyb{hybrid_score:.4f}_ep{best_epoch:03d}.pth'
-            )
+            best_model_path = os.path.join(model_dir, f'best_model_{timestamp}_{loss_tag}.pth')
             torch.save(model.state_dict(), best_model_path)
-
-            if verbose:
-                logging.info("Classification Report for 'validation' set")
-                logging.info(f"\n{json.dumps(cr_val, indent=3)}")
-
-                cm = confusion_matrix(val_y_true, val_y_pred)
-                logging.info(f"\n{cm}")
+            logging.info(f"✅ New best model saved with E-Score: {best_e_score:.4f}")
 
         times.append(time.time() - start_time)
 
@@ -597,12 +626,11 @@ def train_and_validate(model, train_loader, val_loader,
             logging.info("Early stopping triggered.")
             break
 
-    if verbose:
-        logging.info(f"Median time per epoch: {torch.tensor(times).median():.3f}s")
-
+    logging.info(f"Median time per epoch: {torch.tensor(times).median():.3f}s")
     writer.close()
 
-    return best_model_path, best_val_f1, best_completeness, best_hybrid
+    # Return the results from the best epoch
+    return best_model_path, best_epoch_results
 
 
 def evaluate_model(model, loader, loss_fn, dataset_name, device):

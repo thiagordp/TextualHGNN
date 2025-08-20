@@ -29,11 +29,11 @@ PARAMS_GRIDSEARCH = {
         "DECREASE_PROPORTION": [0.05]
     },
     "portuguese": {
-        'LR': [0.0001],
-        'INNER_DIM': [32],
-        'BATCH_SIZE': [4],
+        'LR': [1e-3, 1e-4],
+        'INNER_DIM': [16, 32, 64],
+        'BATCH_SIZE': [2, 4, 8],
         'SOFTMAX_ASSIGN': [True],
-        "DECREASE_PROPORTION": [0.05]
+        "DECREASE_PROPORTION": [0.02, 0.05, 0.1]
     }
 }
 
@@ -49,8 +49,8 @@ def generate_loss_configs(sample_size=300, seed=42):
     for entropy, link, recon, contrast, balance, repel in itertools.product(magnitudes, repeat=6):
         config = {
             "id": f"cfg_{i + 1:05d}",
-            "link": entropy * 100,
-            "entropy": link,
+            "link": link * 100,
+            "entropy": entropy,
             "reconstruction": recon,
             "contrastive": contrast,
             "balance": balance,
@@ -60,7 +60,7 @@ def generate_loss_configs(sample_size=300, seed=42):
         i += 1
 
     # Random subset
-    if len(full_grid) > sample_size:
+    if sample_size and  len(full_grid) > sample_size:
         random.seed(seed)
         sampled_grid = random.sample(full_grid, k=sample_size - 1)
 
@@ -85,7 +85,7 @@ def generate_loss_configs(sample_size=300, seed=42):
     return full_grid
 
 
-LOSS_CONFIG_GRID = generate_loss_configs(sample_size=100)
+LOSS_CONFIG_GRID = generate_loss_configs(sample_size=5)
 
 # LANG = "italian"
 # LANG = "english"
