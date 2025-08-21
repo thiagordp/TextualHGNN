@@ -28,43 +28,75 @@ PARAMS_GRIDSEARCH = {
     },
     "portuguese": {
         'LR': [1e-3], 'INNER_DIM': [32], 'BATCH_SIZE': [4],
-        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.01]
+        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.01, 0.05, 0.1]
     }
 }
 
+import itertools
+import random
+
+import itertools
+import random
+
 
 def generate_loss_configs(sample_size=100, seed=42):
-    """Generates a sampled grid of loss configurations."""
+    """
+    Generates a structured and sampled grid of loss configurations.
+    The sampling is hierarchical, prioritizing simpler combinations of losses.
+    """
+    loss_terms = ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]
     magnitudes = [1e-2, 1e-1, 1e0, 1e1]
-    full_grid = []
-    i = 0
-    # Add baseline with no auxiliary losses
-    full_grid.append({
-        "id": "cfg_00000", "link": 0, "entropy": 0, "reconstruction": 0.0,
+
+    # Use a set to store unique configurations to avoid duplicates
+    # We store tuples of items to make them hashable
+    generated_configs = set()
+
+    # --- Hierarchical Generation ---
+    # The loop iterates from generating single active losses, to pairs, triples, etc.
+    for k in range(1, len(loss_terms) + 1):
+        # 1. Get all combinations of k loss terms to activate
+        for active_terms in itertools.combinations(loss_terms, k):
+            # 2. Get all weight combinations for the active terms
+            for weights in itertools.product(magnitudes, repeat=k):
+                # 3. Create the configuration dictionary
+                config = {term: 0.0 for term in loss_terms}
+                for i, term in enumerate(active_terms):
+                    # The 'link' loss is scaled by 100 as in the original setup
+                    config[term] = weights[i] * 100 if term == "link" else weights[i]
+
+                # Add the configuration to the set
+                generated_configs.add(tuple(sorted(config.items())))
+
+    # --- Convert set of tuples back to list of dictionaries ---
+    # Start with the baseline config
+    final_configs = [{
+        "link": 0.0, "entropy": 0.0, "reconstruction": 0.0,
         "contrastive": 0.0, "balance": 0.0, "repel": 0.0
-    })
+    }]
+    # Add the generated (non-baseline) configs
+    final_configs.extend([dict(t) for t in generated_configs])
 
-    for entropy, link, recon, contrast, balance, repel in itertools.product(magnitudes, repeat=6):
-        config = {
-            "id": f"cfg_{i + 1:05d}", "link": link * 100, "entropy": entropy,
-            "reconstruction": recon, "contrastive": contrast, "balance": balance, "repel": repel
-        }
-        full_grid.append(config)
-        i += 1
+    # --- Finalize and Sample ---
+    # If we generated more configs than needed, take a structured + random sample
+    if len(final_configs) > sample_size:
+        baseline = final_configs[0]
+        other_configs = final_configs[1:]
 
-    if len(full_grid) > sample_size:
-        random.seed(seed)
-        # Sample without replacement, ensuring baseline is always included
-        other_configs = [cfg for cfg in full_grid if cfg['id'] != 'cfg_00000']
-        sampled_grid = [full_grid[0]] + random.sample(other_configs, k=sample_size - 1)
-        sampled_grid.sort(key=lambda x: x['id'])
-        return sampled_grid
+        # Reconstruct the list, ensuring the baseline is always first
+        sampled_configs = [baseline] + other_configs[:sample_size - 1]
+    else:
+        sampled_configs = final_configs
 
-    full_grid.sort(key=lambda x: x['id'])
-    return full_grid
+    # Assign unique IDs and sort for clean, reproducible logs
+    for i, config in enumerate(sampled_configs):
+        config['id'] = f"cfg_{i:05d}"
+
+    sampled_configs.sort(key=lambda x: x['id'])
+
+    return sampled_configs
 
 
-LOSS_CONFIG_GRID = generate_loss_configs(sample_size=5)
+LOSS_CONFIG_GRID = generate_loss_configs(sample_size=100)
 LANG = "portuguese"
 PARAM_GRID = PARAMS_GRIDSEARCH[LANG]
 CONFIG = load_config(LANG, "src/utils/config.json")
@@ -152,10 +184,10 @@ def grid_search():
                 if current_e_score > best_e_score:
                     best_e_score = current_e_score
                     best_config_results = result_row
-                    logging.info(f"🏆 New overall best E-Score found: {best_e_score:.4f}")
+                    logging.info(f"New overall best E-Score found: {best_e_score:.4f}")
 
-            print("Sleeping for 2 minutes...")
-            time.sleep(120)
+            print("Sleeping for 1 minute...")
+            time.sleep(60)
 
     pbar.close()
 
