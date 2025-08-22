@@ -192,7 +192,7 @@ def grid_search():
                 save_results(results, timestamp, best_config_results, verbose=False)
 
             print("Sleeping for 1 minute...")
-            time.sleep(60)
+            time.sleep(20)
 
     pbar.close()
 
