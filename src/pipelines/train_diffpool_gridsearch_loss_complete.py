@@ -27,8 +27,8 @@ PARAMS_GRIDSEARCH = {
         'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.05]
     },
     "portuguese": {
-        'LR': [1e-3], 'INNER_DIM': [32], 'BATCH_SIZE': [4],
-        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.01, 0.05, 0.1]
+        'LR': [1e-4], 'INNER_DIM': [32], 'BATCH_SIZE': [2],
+        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.02]
     }
 }
 
@@ -44,15 +44,16 @@ def generate_loss_configs(sample_size=100, seed=42):
     Generates a structured and sampled grid of loss configurations.
     The sampling is hierarchical, prioritizing simpler combinations of losses.
     """
-    loss_terms = ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]
+    loss_terms = ["link", "entropy", "reconstruction", "contrastive", "balance", "repel", "l2"]
     magnitudes = [1e-2, 1e-1, 1e0, 1e1]
 
     # Use a set to store unique configurations to avoid duplicates
     # We store tuples of items to make them hashable
-    generated_configs = set()
+    generated_configs = []
 
     # --- Hierarchical Generation ---
     # The loop iterates from generating single active losses, to pairs, triples, etc.
+    config_id = 1
     for k in range(1, len(loss_terms) + 1):
         # 1. Get all combinations of k loss terms to activate
         for active_terms in itertools.combinations(loss_terms, k):
@@ -64,32 +65,33 @@ def generate_loss_configs(sample_size=100, seed=42):
                     # The 'link' loss is scaled by 100 as in the original setup
                     config[term] = weights[i] * 100 if term == "link" else weights[i]
 
+                config['id'] = f"cfg_{config_id:05d}"
                 # Add the configuration to the set
-                generated_configs.add(tuple(sorted(config.items())))
+                generated_configs.append(config)
+                config_id += 1
 
     # --- Convert set of tuples back to list of dictionaries ---
     # Start with the baseline config
     final_configs = [{
         "link": 0.0, "entropy": 0.0, "reconstruction": 0.0,
-        "contrastive": 0.0, "balance": 0.0, "repel": 0.0
+        "contrastive": 0.0, "balance": 0.0, "repel": 0.0, "l2": 0.0, "id": f"cfg_{0:05d}"
     }]
     # Add the generated (non-baseline) configs
-    final_configs.extend([dict(t) for t in generated_configs])
+    final_configs.extend(generated_configs)
 
     # --- Finalize and Sample ---
     # If we generated more configs than needed, take a structured + random sample
     if len(final_configs) > sample_size:
         baseline = final_configs[0]
-        other_configs = final_configs[1:]
+        num_isolated_combinations = len(loss_terms) * len(magnitudes)
+        isolated_configs = final_configs[1:num_isolated_combinations + 1]
+        other_configs = final_configs[num_isolated_combinations + 1:]
+        random.shuffle(other_configs)
 
         # Reconstruct the list, ensuring the baseline is always first
-        sampled_configs = [baseline] + other_configs[:sample_size - 1]
+        sampled_configs = [baseline] + isolated_configs + other_configs[:sample_size - (num_isolated_combinations + 1)]
     else:
         sampled_configs = final_configs
-
-    # Assign unique IDs and sort for clean, reproducible logs
-    for i, config in enumerate(sampled_configs):
-        config['id'] = f"cfg_{i:05d}"
 
     sampled_configs.sort(key=lambda x: x['id'])
 
@@ -135,7 +137,7 @@ def grid_search():
                          f"  SOFTMAX_ASSIGN={softmax_assign}\n"
                          f"  DECREASE_PROPORTION={decrease_proportion}")
             logging.info(f"Loss Config ({loss_id}):")
-            for k in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]:
+            for k in ["link", "entropy", "reconstruction", "contrastive", "balance", "repel", "l2"]:
                 logging.info(f"  {k.upper():<12} = {loss_config.get(k, 0.0)}")
 
             # --- DATA and MODEL SETUP ---
@@ -148,7 +150,7 @@ def grid_search():
                 in_channels=tgd_train.num_node_attributes, out_channels=tgd_train.num_classes,
                 max_num_nodes=CONFIG["NUM_NODES"], lr=lr, hidden_dim=CONFIG["HIDDEN_DIM"],
                 inner_dim=inner_dim, softmax_assign=softmax_assign, decrease_proportion=decrease_proportion,
-                device=DEVICE
+                device=DEVICE, l2=loss_config["l2"]
             )
             class_weights = calculate_class_weights(tgd_train, device=DEVICE)
             loss_fn = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
@@ -186,6 +188,9 @@ def grid_search():
                     best_config_results = result_row
                     logging.info(f"New overall best E-Score found: {best_e_score:.4f}")
 
+            if results:
+                save_results(results, timestamp, best_config_results, verbose=False)
+
             print("Sleeping for 1 minute...")
             time.sleep(60)
 
@@ -193,24 +198,29 @@ def grid_search():
 
     # --- SAVE FINAL RESULTS ---
     if results:
-        df = pd.DataFrame(results)
-        # Ensure consistent column order
-        cols_order = ["E_SCORE", "HI_SCORE", "MACRO_F1", "COMPLETENESS", "CONFORMITY", "MODULARITY", "SILHOUETTE"]
-        cols_order += ["LR", "INNER_DIM", "BATCH_SIZE", "LOSS_CONFIG_ID", "MODEL_PATH"]
-        # Add loss columns dynamically
-        loss_cols = [f"loss_{k}" for k in LOSS_CONFIG_GRID[0] if k != 'id']
-        cols_order += loss_cols
+        save_results(results, timestamp, best_config_results, verbose=True)
 
-        # Reorder DataFrame, converting metrics to uppercase for clarity
-        df.rename(columns={k: k.upper() for k in df.columns}, inplace=True)
-        final_cols = [c.upper() for c in cols_order if c.upper() in df.columns]
-        df = df[final_cols]
-        df = df.sort_values(by="E_SCORE", ascending=False)
 
-        results_dir = "grid_search_results"
-        os.makedirs(results_dir, exist_ok=True)
-        excel_path = os.path.join(results_dir, f"gridsearch_results_{CONFIG['DATASET']}_{timestamp}.xlsx")
-        df.to_excel(excel_path, index=False)
+def save_results(target, timestamp, best_config_results, verbose=True):
+    df = pd.DataFrame(target)
+    # Ensure consistent column order
+    cols_order = ["E_SCORE", "HI_SCORE", "MACRO_F1", "COMPLETENESS", "CONFORMITY", "MODULARITY", "SILHOUETTE"]
+    cols_order += ["LR", "INNER_DIM", "BATCH_SIZE", "LOSS_CONFIG_ID", "MODEL_PATH"]
+    # Add loss columns dynamically
+    loss_cols = [f"loss_{k}" for k in LOSS_CONFIG_GRID[0] if k != 'id']
+    cols_order += loss_cols
+
+    # Reorder DataFrame, converting metrics to uppercase for clarity
+    df.rename(columns={k: k.upper() for k in df.columns}, inplace=True)
+    final_cols = [c.upper() for c in cols_order if c.upper() in df.columns]
+    df = df[final_cols]
+    df = df.sort_values(by="E_SCORE", ascending=False)
+
+    results_dir = "grid_search_results"
+    os.makedirs(results_dir, exist_ok=True)
+    excel_path = os.path.join(results_dir, f"gridsearch_results_{CONFIG['DATASET']}_{timestamp}.xlsx")
+    df.to_excel(excel_path, index=False)
+    if verbose:
         logging.info(f"\nGrid search complete. All results saved to: {excel_path}")
         logging.info(f"\nBest Overall Configuration:\n{json.dumps(best_config_results, indent=4)}")
 

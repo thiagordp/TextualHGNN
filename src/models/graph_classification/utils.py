@@ -98,5 +98,7 @@ def loss_config_to_tag(loss_config: dict) -> str:
         parts.append(f"bl{loss_config['balance']}")
     if "repel" in loss_config:
         parts.append(f"rp{loss_config['repel']}")
+    if "l2" in loss_config:
+        parts.append(f"l2{loss_config['l2']}")
 
     return "_".join(parts)

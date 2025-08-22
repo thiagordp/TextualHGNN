@@ -18,11 +18,10 @@ from torch_geometric.utils import dense_to_sparse
 from tqdm import tqdm
 from torch_geometric.data import Data
 
-
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
 from src.models.graph_classification.gnn import DiffPool
 from src.models.graph_classification.utils import loss_config_to_tag
-from src.models.graph_explainability.cg_evaluation_metrics import  \
+from src.models.graph_explainability.cg_evaluation_metrics import \
     ConceptConformityCalculator, ModularityCalculator, SilhouetteScoreCalculator, ConceptCompletenessCalculator
 
 
@@ -135,7 +134,7 @@ def create_loaders(train_dataset, val_dataset, test_dataset, batch_size):
 
 
 def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
-                     inner_dim, softmax_assign: bool, decrease_proportion, device: str | torch.device):
+                     inner_dim, softmax_assign: bool, decrease_proportion, device: str | torch.device, l2=0):
     """
     Initialize the GNN model and optimizer.
 
@@ -149,6 +148,7 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
         softmax_assign (bool): Assign softmax weights.
         decrease_proportion (float): Decrease proportion.
         device (str): Device to use.
+        l2
 
     Returns:
         tuple: The initialized model and optimizer.
@@ -167,11 +167,10 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
     logging.info(f"Model structure:")
     logging.info(model)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=l2)
     logging.info(f"Model Initialized with {model.num_parameters} parameters.")
 
     return model, optimizer
-
 
 
 def compute_aux_losses(model_outputs, data, loss_config):
@@ -533,7 +532,7 @@ def train_and_validate(model, train_loader, val_loader,
 
                 # Convert one-hot labels to class indices
                 if y_tensor.ndim > 1 and y_tensor.shape[1] > 1:
-                    y_indices = y_tensor.argmax(dim=1)
+                    y_indices = y_tensor.sum(dim=1)
                 else:
                     y_indices = y_tensor.long()  # Ensure it's integer type
 
@@ -556,6 +555,7 @@ def train_and_validate(model, train_loader, val_loader,
 
                     # Ensure y_i is a tensor for the Data object
                     y_val = data.y[i]
+
                     if isinstance(y_val, list):
                         # Handle case where y is a list of lists/tensors
                         y_i = torch.tensor(y_val, device=device, dtype=torch.long)
@@ -565,12 +565,18 @@ def train_and_validate(model, train_loader, val_loader,
                     else:  # It's already a tensor
                         y_i = y_val
 
+                    y_i = y_i.unsqueeze(dim=0)
+                    if y_i.ndim > 1 and y_i.shape[1] > 1:
+                        y_i = y_i.sum(dim=1)
+                    else:
+                        y_i = y_i.long()  # Ensure it's integer type
+
                     edge_index_i = dense_to_sparse(adj_i)[0]
                     single_graph_data = Data(x=x_i.clone(), edge_index=edge_index_i.clone(), y=y_i.clone())
 
                     single_graph_concepts = concept_ids_batch[i, :num_nodes]
 
-                    completeness_calc.add_item(single_graph_data.y, single_graph_concepts)
+                    completeness_calc.add_item(y_i, single_graph_concepts)
                     conformity_calc.add_item(single_graph_data, single_graph_concepts)
                     modularity_calc.add_item(single_graph_data, single_graph_concepts)
                     silhouette_calc.add_item(single_graph_data, single_graph_concepts)
@@ -585,7 +591,7 @@ def train_and_validate(model, train_loader, val_loader,
         silhouette = silhouette_calc.calculate()
 
         # Calculate HI-Score and E-Score
-        hi_score = (completeness * conformity * modularity * silhouette) ** 0.25
+        hi_score = (completeness + conformity + modularity + silhouette) / 4
         e_score = (2 * macro_f1 * hi_score) / (macro_f1 + hi_score) if (macro_f1 + hi_score) > 0 else 0
 
         # --- LOGGING ---
