@@ -214,3 +214,206 @@ def preprocessing_legal_pt(text: str, nlp_spacy):
 
     return text
 
+
+import re
+from typing import List, Tuple
+
+
+# --- Funções Auxiliares (Nível de Módulo) ---
+
+def _create_spaced_pattern(word: str) -> str:
+    """
+    Cria um padrão regex para uma palavra com espaços opcionais entre as letras.
+    Isso lida com formatações como 'R E L A T Ó R I O'.
+    """
+    escaped_word = re.escape(word)
+    return r'\s*'.join(list(escaped_word))
+
+
+def _remove_noise_patterns(target: str) -> str:
+    """Remove linhas que são apenas cabeçalhos de seção, marcadores de página ou metadados gerais."""
+    # Padrões para os títulos que, após usados como marcadores, devem ser removidos do corpo do texto.
+    relatorio_spaced = _create_spaced_pattern("RELATÓRIO")
+    voto_spaced = _create_spaced_pattern("VOTO")
+    vista_spaced = _create_spaced_pattern("VISTA")
+    ementa_spaced = _create_spaced_pattern("EMENTA")
+    acordao_spaced = _create_spaced_pattern("ACÓRDÃO")
+    decisao_spaced = _create_spaced_pattern("DECISÃO")
+
+    noise_patterns = [
+        # Remove os próprios títulos das seções
+        re.compile(
+            fr'^\s*({relatorio_spaced}|{voto_spaced}(?:[ –-]\s*{vista_spaced})?(?: - MIN\. [\w\s()]+)?|{ementa_spaced}|{acordao_spaced}|{decisao_spaced})\s*$',
+            re.IGNORECASE),
+        # Remove identificadores de processo (ex: HC 123.456 / SP)
+        re.compile(r'^\s*(HC|REsp|AgRg|RHC)\s+[\d.-]+\s*/\s*\w{2}\s*$', re.IGNORECASE),
+        # Remove marcadores de página (ex: fls. 123)
+        re.compile(r'^\s*(página|pag|fls)\.?\s*\d+(\s*de\s*\d+)?\s*$', re.IGNORECASE),
+        # Remove cabeçalhos de data e turma
+        re.compile(r'^\s*\d{2}/\d{2}/\d{4}\s+(PRIMEIRA|SEGUNDA)\s+TURMA\s*$', re.IGNORECASE),
+        re.compile(r'^\s*(PRIMEIRA|SEGUNDA)\s+TURMA\s*$', re.IGNORECASE),
+        re.compile(r'^\s*(PLENÁRIO)\s*$', re.IGNORECASE),
+        # Remove assinaturas de ministros
+        re.compile(
+            r'^\s*Ministro\s+[\w\s]+(\s*-\s*(?:Relator(?:a)?|Presidente e Relator|Redator(?:a)? para o acórdão))?\s*$',
+            re.IGNORECASE)
+    ]
+
+    clean_lines = []
+    for line in target.split('\n'):
+        stripped_line = line.strip()
+        # Mantém a linha apenas se ela não for vazia e não corresponder a nenhum padrão de ruído
+        if stripped_line and not any(p.fullmatch(stripped_line) for p in noise_patterns):
+            clean_lines.append(line)
+
+    return "\n".join(clean_lines)
+
+
+def _remove_section_metadata(target: str) -> str:
+    """Remove o bloco de metadados (RELATOR, PACTE, etc.) do início de uma seção."""
+    metadata_pattern = re.compile(
+        r'^\s*((?:(?:RELATOR|PACTE\.\(S\)|IMPTE\.\(S\)|COATOR\(A/S\)\(ES\)|ADV\.\(A/S\)|PROC\.\(A/S\)\(ES\))\s*:.+?\n)+)',
+        re.IGNORECASE | re.MULTILINE
+    )
+    return metadata_pattern.sub('', target).strip()
+
+
+def _remove_footers_and_auth(target: str) -> str:
+    """Remove blocos de autenticação e rodapés de assinatura digital."""
+    auth_pattern = re.compile(r'http://www\.stf\.jus\.br/portal/autenticacao/.*?(?:\n|$)', re.IGNORECASE | re.DOTALL)
+    target = auth_pattern.sub('', target)
+    icp_pattern = re.compile(
+        r'.*?(?:ICP-Brasil|Documento\s+assinado\s+digitalmente|Infraestrutura\s+de\s+Chaves\s+Públicas\s+Brasileira).*?(?:\n|$)',
+        re.IGNORECASE)
+    target = icp_pattern.sub('', target)
+    return target.strip()
+
+
+def _join_broken_lines_and_paragraphs(target: str) -> str:
+    """Junta linhas quebradas no meio da frase, mas preserva parágrafos (linhas em branco)."""
+    # Substitui quebras de linha únicas (dentro de um parágrafo) por espaço
+    # Preserva quebras de linha duplas (entre parágrafos)
+    return re.sub(r'(?<!\n)\n(?!\n)', ' ', target)
+
+
+def _replace_special_chars_pt(target: str) -> str:
+    """Normaliza caracteres, expande abreviações e remove ruídos."""
+    target = target.replace('–', '-').replace('—', '-').replace('―', '-')
+    target = target.replace('“', '"').replace('”', '"').replace('‘', "'").replace('’', "'")
+    target = target.replace('…', '...').replace('•', '').replace('·', '')
+    target = re.sub(r'\bn\.?[º°0]\b', 'número', target, flags=re.IGNORECASE)
+    target = re.sub(r'\bn\.?o\b(?=\s*\d)', 'número', target, flags=re.IGNORECASE)
+    return target
+
+
+def _standardize_legal_entities(target: str) -> str:
+    """Padroniza referências jurídicas como Artigos, parágrafos, etc., para facilitar a análise."""
+    target = target.replace('§', 'paragrafo')
+    target = re.sub(r'\b(art|arts)\.?\s*([\d./-]+)\b', lambda m: f"ARTIGO_{m.group(2).replace('.', '')}", target,
+                    flags=re.IGNORECASE)
+    return target
+
+
+def _extract_and_structure_sections(text: str) -> List[Tuple[str, str]]:
+    """
+    Função interna para extrair o conteúdo das seções 'RELATÓRIO' e 'VOTO' de forma estruturada.
+    Retorna uma lista de tuplas: (título_da_seção, texto_da_seção).
+    """
+    relatorio_spaced = _create_spaced_pattern("RELATÓRIO")
+    voto_spaced = _create_spaced_pattern("VOTO")
+    vista_spaced = _create_spaced_pattern("VISTA")
+
+    # Aprimorado para aceitar parênteses no nome do Ministro, ex: (RELATOR)
+    start_pattern = re.compile(
+        fr"^\s*({relatorio_spaced}|{voto_spaced}(?:[ –-]\s*{vista_spaced})?(?: - MIN\. [\w\s()]+)?)\s*$",
+        re.IGNORECASE | re.MULTILINE
+    )
+
+    end_markers = [
+        "Extrato de Ata", "Decisão de Julgamento", "DEBATE", "EXPLICAÇÃO",
+        "NOTAS PARA O VOTO", "ANTECIPAÇÃO AO VOTO", "RETIFICAÇÃO DE VOTO",
+        "CONFIRMAÇÃO DE VOTO", "ESCLARECIMENTO"
+    ]
+    end_pattern_str = "|".join([_create_spaced_pattern(marker) for marker in end_markers])
+    end_pattern = re.compile(fr"^\s*({end_pattern_str})", re.IGNORECASE | re.MULTILINE)
+
+    start_matches = list(start_pattern.finditer(text))
+    if not start_matches:
+        return []
+
+    end_match = end_pattern.search(text, start_matches[0].start())
+    end_index = end_match.start() if end_match else len(text)
+
+    structured_sections = []
+
+    for i, current_match in enumerate(start_matches):
+        section_title = current_match.group(1).strip()
+        section_title = re.sub(r'\s+', ' ', section_title)  # Normaliza espaçamento no título
+
+        section_start_index = current_match.end()
+        is_last_section = (i + 1) == len(start_matches)
+
+        section_end_index = start_matches[i + 1].start() if not is_last_section else end_index
+
+        if section_end_index > end_index:
+            section_end_index = end_index
+
+        section_text = text[section_start_index:section_end_index].strip()
+        if section_text:
+            structured_sections.append((section_title, section_text))
+
+    return structured_sections
+
+
+# --- FUNÇÃO PRINCIPAL PARA O USUÁRIO ---
+
+def preprocessing_legal_pt_voto_relatorio(text: str) -> str:
+    """
+    Realiza o pré-processamento de acórdãos, extraindo e limpando o relatório e
+    os votos, e retorna o resultado como uma string formatada e legível.
+
+    A pipeline executa os seguintes passos:
+    1.  Extrai as seções "RELATÓRIO" e "VOTO" de forma estruturada.
+    2.  Para cada seção extraída, aplica uma série de limpezas:
+        - Remove metadados (RELATOR, PACTE, etc.).
+        - Remove rodapés e links de autenticação.
+        - Remove ruídos de linha (cabeçalhos, paginação).
+        - Junta linhas quebradas, preservando os parágrafos.
+        - Normaliza caracteres e expande abreviações.
+        - Padroniza entidades jurídicas (ex: Art. 99 -> ARTIGO_99).
+    3.  Formata a saída final como um texto único, com títulos de seção
+        claramente identificados.
+
+    Args:
+        text: Uma string contendo o documento jurídico completo.
+
+    Returns:
+        Uma única string com o conteúdo pré-processado e formatado, ou uma
+        string vazia se nenhuma seção relevante for encontrada.
+    """
+    structured_sections = _extract_and_structure_sections(text)
+    if not structured_sections:
+        return ""
+
+    formatted_output = []
+    for title, section_text in structured_sections:
+        # Pipeline de limpeza aplicada a cada seção individualmente
+        clean_text = _remove_section_metadata(section_text)
+        clean_text = _remove_footers_and_auth(clean_text)
+        clean_text = _remove_noise_patterns(clean_text)
+        clean_text = _join_broken_lines_and_paragraphs(clean_text)
+        clean_text = _replace_special_chars_pt(clean_text)
+        clean_text = _standardize_legal_entities(clean_text)
+
+        # Limpeza cosmética final
+        clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+
+        # Formata a seção com seu título e adiciona à lista de saída
+        if clean_text:
+            # Capitaliza o título para um formato mais limpo e consistente
+            formatted_title = title.upper().replace("MIN.", "MINISTRO")
+            formatted_section = f"{formatted_title}:\n{clean_text}"
+            formatted_output.append(formatted_section)
+
+    # Junta todas as seções formatadas com duas quebras de linha
+    return "\n\n".join(formatted_output)

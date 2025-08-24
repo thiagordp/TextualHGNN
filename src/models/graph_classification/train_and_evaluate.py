@@ -8,7 +8,7 @@ from typing import Tuple, Optional
 import torch
 import torch_geometric.transforms as T
 import torch.nn.functional as F
-from sklearn.metrics import classification_report, f1_score, confusion_matrix
+from sklearn.metrics import classification_report, f1_score, confusion_matrix, accuracy_score
 from sklearn.utils.class_weight import compute_class_weight
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
@@ -584,14 +584,25 @@ def train_and_validate(model, train_loader, val_loader,
         # Calculate final metrics for the epoch
         preds, labels = torch.cat(all_preds).numpy(), torch.cat(all_labels).numpy()
 
+        with torch.no_grad():
+            total_params = 0
+            sum_abs_params = 0.0
+            for param in model.parameters():
+                if param.requires_grad:
+                    total_params += param.numel()
+                    sum_abs_params += torch.sum(torch.abs(param.data)).item()
+
+        avg_abs_params = sum_abs_params / total_params if total_params > 0 else 0
+
         macro_f1 = f1_score(labels, preds, average='macro', zero_division=0)
+        acc = accuracy_score(labels, preds)
         completeness = completeness_calc.calculate()
         conformity = conformity_calc.calculate()
         modularity = modularity_calc.calculate()
         silhouette = silhouette_calc.calculate()
 
         # Calculate HI-Score and E-Score
-        hi_score = (completeness + conformity + modularity + silhouette) / 4
+        hi_score = (completeness + conformity) / 2
         e_score = (2 * macro_f1 * hi_score) / (macro_f1 + hi_score) if (macro_f1 + hi_score) > 0 else 0
 
         # --- LOGGING ---
@@ -605,16 +616,23 @@ def train_and_validate(model, train_loader, val_loader,
         writer.add_scalar('Overall/E_Score', e_score, epoch)
 
         logging.info(
-            f'Epoch {epoch:03d} | F1: {macro_f1:.4f} | Comp: {completeness:.4f} | Conf: {conformity:.4f} | Mod: {modularity:.4f} | Sil: {silhouette:.4f} | E-Score: {e_score:.4f}')
+            f'Epoch {epoch:03d} | Acc: {acc:.4f} | F1: {macro_f1:.4f} | Comp: {completeness:.4f} | Conf: {conformity:.4f} | '
+            f'Mod: {modularity:.4f} | Sil: {silhouette:.4f} | '
+            f'E-Score: {e_score:.4f} | Sum Params: {sum_abs_params:.4f}'
+        )
 
         # --- MODEL CHECKPOINTING ---
         if e_score > best_e_score:
             best_e_score = e_score
+            best_epoch = epoch
             best_epoch_results = {
                 "loss_config": loss_config, "best_epoch": epoch, "macro_f1": macro_f1,
                 "completeness": completeness, "conformity": conformity,
                 "modularity": modularity, "silhouette": silhouette,
-                "hi_score": hi_score, "e_score": e_score
+                "hi_score": hi_score, "e_score": e_score,
+                'accuracy': acc,
+                'sum_abs_params': sum_abs_params,
+                'avg_abs_params': avg_abs_params
             }
 
             model_name = type(model).__name__

@@ -27,8 +27,8 @@ PARAMS_GRIDSEARCH = {
         'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.05]
     },
     "portuguese": {
-        'LR': [1e-4], 'INNER_DIM': [32], 'BATCH_SIZE': [2],
-        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.02]
+        'LR': [1e-4], 'INNER_DIM': [32, 64], 'BATCH_SIZE': [8],
+        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.02, 0.1]
     }
 }
 
@@ -54,6 +54,10 @@ def generate_loss_configs(sample_size=100, seed=42):
     # --- Hierarchical Generation ---
     # The loop iterates from generating single active losses, to pairs, triples, etc.
     config_id = 1
+
+    scale_loss = {
+        "link": 100
+    }
     for k in range(1, len(loss_terms) + 1):
         # 1. Get all combinations of k loss terms to activate
         for active_terms in itertools.combinations(loss_terms, k):
@@ -63,7 +67,7 @@ def generate_loss_configs(sample_size=100, seed=42):
                 config = {term: 0.0 for term in loss_terms}
                 for i, term in enumerate(active_terms):
                     # The 'link' loss is scaled by 100 as in the original setup
-                    config[term] = weights[i] * 100 if term == "link" else weights[i]
+                    config[term] = weights[i] * scale_loss[term] if term in scale_loss else weights[i]
 
                 config['id'] = f"cfg_{config_id:05d}"
                 # Add the configuration to the set
@@ -85,11 +89,11 @@ def generate_loss_configs(sample_size=100, seed=42):
         baseline = final_configs[0]
         num_isolated_combinations = len(loss_terms) * len(magnitudes)
         isolated_configs = final_configs[1:num_isolated_combinations + 1]
-        other_configs = final_configs[num_isolated_combinations + 1:]
-        random.shuffle(other_configs)
+        # other_configs = final_configs[num_isolated_combinations + 1:]
+        # random.shuffle(other_configs)
 
         # Reconstruct the list, ensuring the baseline is always first
-        sampled_configs = [baseline] + isolated_configs + other_configs[:sample_size - (num_isolated_combinations + 1)]
+        sampled_configs = [baseline] + isolated_configs  # + other_configs[:sample_size - (num_isolated_combinations + 1)]
     else:
         sampled_configs = final_configs
 

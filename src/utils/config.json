@@ -32,8 +32,8 @@
     "ROOT": "data/datasets/IMDB"
   },
   "portuguese": {
-    "EPOCHS": 20,
-    "PATIENCE": 20,
+    "EPOCHS": 30,
+    "PATIENCE": 15,
     "LR": 0.005,
     "LR_DECAY": 0,
     "NODE_FEATURE_DIM": 100,

@@ -135,6 +135,7 @@ def main():
 
         if graph is not None and graph.number_of_nodes() <= 300:
             docs_explained += 1
+            node_to_token_map = {i: token for i, token in enumerate(graph.nodes())}
 
             cg.concept_grounding()
 
