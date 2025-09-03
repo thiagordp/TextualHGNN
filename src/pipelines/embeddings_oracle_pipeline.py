@@ -3,8 +3,8 @@ import logging
 from src.models.graph_explainability.embeddings_oracle import EmbeddingOracle
 
 # Define paths for the model and the database
-language = "english"
-DATASET = "IMDB"
+language = "portuguese_voto"
+DATASET = "STF_HC_Voto_Relatorio"
 log_file = f"logs/embeddings_oracle_{DATASET}.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +21,7 @@ def main():
 
     logger.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
 
-    model_path = 'data/external/embeddings/enwiki_20180420_100d.bin'
+    model_path = 'data/external/embeddings/glove_legal_100.bin'
     db_path = f"data/oracle/embeddings_{DATASET}.db"
 
     # Initialize the EmbeddingOracle

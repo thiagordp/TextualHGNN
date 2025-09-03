@@ -23,7 +23,7 @@ class EmbeddingOracle(BaseOracle):
     def __init__(self, model_path: str, db_path: str = "/mnt/data/embeddings.db", batch_size: int = 2000000):
         self.db_path = db_path
         self.batch_size = batch_size
-        self.model = KeyedVectors.load('data/external/embeddings/itwiki_20180420_100d.bin')
+        self.model = KeyedVectors.load(model_path)
         self.dimension = self.model.vector_size
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()

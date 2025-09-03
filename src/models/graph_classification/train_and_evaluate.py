@@ -483,7 +483,7 @@ def test(model, loader, loss_fn, device, verbose=True):
 def train_and_validate(model, train_loader, val_loader,
                        optimizer, loss_fn, patience, epochs, lr, hidden_dim, batch_size,
                        use_softmax, decrease_prop, dataset_name, device, timestamp, grid_search=False, verbose=True,
-                       loss_config={}):
+                       loss_config={}, repetition=None):
     """
     Train and validate the model, calculating a full suite of interpretability metrics.
     """
@@ -640,9 +640,13 @@ def train_and_validate(model, train_loader, val_loader,
             model_dir = os.path.join(path_prefix, dataset_name)
             os.makedirs(model_dir, exist_ok=True)
 
-            best_model_path = os.path.join(model_dir, f'best_model_{timestamp}_{loss_tag}.pth')
+            hyperparams = f"lr{lr}_hd_{hidden_dim}_bs{batch_size}_dec{decrease_prop}"
+            # lr, hidden_dim, batch_size,
+            #                        use_softmax, decrease_prop
+            model_name = f'best_model_{model_name}_{timestamp}_{hyperparams}_{loss_tag}_rep{repetition:02d}.pth' if repetition is not None else f'best_model_{model_name}_{timestamp}_{hyperparams}_{loss_tag}.pth'
+            best_model_path = os.path.join(model_dir, model_name)
             torch.save(model.state_dict(), best_model_path)
-            logging.info(f"✅ New best model saved with E-Score: {best_e_score:.4f}")
+            logging.info(f"✅ New best model saved with E-Score: {best_e_score:.4f} into '{best_model_path}'")
 
         times.append(time.time() - start_time)
 

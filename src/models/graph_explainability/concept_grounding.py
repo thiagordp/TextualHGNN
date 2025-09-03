@@ -8,6 +8,7 @@ from torch_geometric.data import Data
 from tqdm import tqdm
 import seaborn as sns
 
+from src.data.preprocessing import preprocessing_legal_pt
 from src.models.graph_classification.gnn import DiffPool
 from src.models.graph_explainability.embeddings_oracle import EmbeddingOracle
 from src.models.graph_explainability.llm_oracle import LLMOracle
@@ -65,12 +66,19 @@ class ConceptGrounding:
         # Hardcoded for now.
         if self.language == 'english':
             labels = {0: "negative", 1: 'positive'}
-        else:
+        elif self.language == "italian":
             labels = {0: "NotReleased", 1: 'Released'}
-
+        else:
+            labels = {0: "Preso", 1: 'Solto'}
         label = labels[self.y_test]
 
         self.raw_file_content = open(self.raw_file_path / f"{label}/{self.data_sample_id}.txt", "r").read().strip()
+
+        # Preprocess and print the document content
+        preprocessed_content = preprocessing_legal_pt(self.raw_file_content)
+        logging.info(f"--- Preprocessed Document Content ---")
+        logging.info(preprocessed_content)
+        logging.info(f"------------------------------------")
 
         logging.info(f"Analyzing File {self.data_sample_id} | y_test {self.y_test} | y_pred {self.y_pred}")
 
@@ -80,21 +88,20 @@ class ConceptGrounding:
 
         top_assignments_s12, top_nodes_s12 = self._get_top_most_nodes(layer=1, k=10)
 
-    def retrieve_relevant_hypernodes_and_corresponding_nodes(self, top_l1: int = 10, top_l0: int = 5):
+    def retrieve_relevant_hypernodes_and_corresponding_nodes(self, l1_threshold: float = 0.5,
+                                                             l0_threshold: float = 0.5):
 
-        # Step 1: Compute the top L1 indices based on row sums
-        row_sums = self.s12.sum(dim=1)
-        top_l1_indices = torch.topk(row_sums, top_l1).indices.tolist()
+        # Step 1: Compute the top L1 indices based on a threshold
+        top_l1_indices = (self.s12 > l1_threshold).any(dim=1).nonzero(as_tuple=True)[0].tolist()
 
-        # Step 2: Compute the top L0 indices for each L1 index
+        # Step 2: Compute the top L0 indices for each L1 index based on a threshold
         top_l0_indices_per_l1 = {}
         s01 = self.s01
 
         for m in top_l1_indices:
             column_values = s01[:, m]
-            _, top_k_indices = torch.topk(column_values, top_l0, dim=0)
+            top_k_indices = (column_values > l0_threshold).nonzero(as_tuple=True)[0]
             top_l0_indices_per_l1[m] = top_k_indices.tolist()
-
 
         # logging.info("Top L0 Indices per L1:")
         # logging.info(json.dumps(top_l0_indices_per_l1, indent=3))
@@ -113,7 +120,8 @@ class ConceptGrounding:
             # Build the dictionary entry
             relevant_data[l1_index] = {
                 "hypernode": hypernode,
-                "nodes": nodes
+                "nodes": nodes,
+                "l0_indices": l0_indices
             }
 
         # logging.info("\nRelevant Data (Structured as Dictionary):")
@@ -138,56 +146,73 @@ class ConceptGrounding:
         else:
             raise ValueError("Invalid layer. Choose from: 1, 2.")
 
-    def _get_nodes_l0(self, nodes_l0):
-        terms_l0 = []
-
-        for node_l0 in nodes_l0:
+    def _get_nodes_l0(self, nodes_l0, l0_indices, l1_index):
+        terms_with_scores = {}
+        for node_l0, original_index in zip(nodes_l0, l0_indices):
             input_embedding = torch.tensor([node_l0], device=self.device)
-            term = self.embedding_oracle.concept_grounding_from_embeddings(
+            result = self.embedding_oracle.concept_grounding_from_embeddings(
                 input_embedding,
                 num_terms_to_retrieve=1,
                 similarity_threshold=0.9999
             )
-            terms_l0.extend(term['terms'] if 'terms' in term else term)
+            if 'terms' in result and result['terms']:
+                term = result['terms'][0]
+                # Get the assignment value from the s01 matrix
+                assignment_value = self.s01[original_index, l1_index].item()
+                terms_with_scores[term] = assignment_value
 
-        return terms_l0
+        # Sort the dictionary by value in descending order
+        sorted_terms = sorted(terms_with_scores.items(), key=lambda item: item[1], reverse=True)
+        return dict(sorted_terms)
 
     def concept_grounding(self):
 
-        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(top_l1=self.hyper_nodes_to_explain, top_l0=self.nodes_per_hyper_node)
+        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(l1_threshold=0.1,
+                                                                                         l0_threshold=0.1)
         nodes_l1_to_words_l0 = {'explanation': {}}
 
-        for node in tqdm(nodes_l1_to_nodes_l0, desc="Grounding L1"):
-            hyper_node = nodes_l1_to_nodes_l0[node]["hypernode"][:100]
+        for node_index, node_data in tqdm(nodes_l1_to_nodes_l0.items(), desc="Grounding L1"):
+            hyper_node = node_data["hypernode"][:100]
             hyper_node = torch.tensor(hyper_node, device=self.device)
 
-            nodes_l0 = nodes_l1_to_nodes_l0[node]["nodes"]
+            nodes_l0 = node_data["nodes"]
+            l0_indices = node_data["l0_indices"]
 
             # For this embeddings oracle is required.
-            terms_l0 = self._get_nodes_l0(nodes_l0)
+            terms_l0_with_scores = self._get_nodes_l0(nodes_l0, l0_indices, node_index)
 
-            logging.info(f"Nodes from L0 under analysis: {terms_l0}")
+            logging.info("Nodes from L0 under analysis:")
+            logging.info(json.dumps(terms_l0_with_scores, indent=4, ensure_ascii=False))
+
+            # New: Log L1 to L2 assignment values, sorted
+            l1_to_l2_assignments = self.s12[node_index, :].tolist()
+            sorted_l1_to_l2 = sorted(l1_to_l2_assignments, reverse=True)
+            logging.info(f"L1 Node {node_index} to L2 assignments (sorted): {sorted_l1_to_l2}")
+
+            terms_l0 = list(terms_l0_with_scores.keys())
 
             terms_cg_methods = {}
 
-            # methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
-            # methods = ["top_l0", "llm_search"]
-            methods = ["top_l0", "llm_search"]
+            methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
             for cg_method in methods:
                 logging.info("Starting with method " + cg_method)
 
                 if cg_method == "top_l0":
-                    term_l0  = terms_l0[:1]
+                    term_l0 = terms_l0[:1]
                     terms_cg_methods["top_l0"] = term_l0
                     logging.info(f"Terms (top_l0): {term_l0}")
 
-                if cg_method == "semantic_search_l0":
+                elif cg_method == "semantic_search_l0":
                     term_l1 = self.embedding_oracle.concept_grounding_from_words(
                         terms_l0,
                         num_terms_to_retrieve=3,
                         similarity_threshold=0.9999
                     )
-                    logging.info(f"Terms (Method L0): {term_l1}")
+                    if 'terms' in term_l1 and 'similarities' in term_l1:
+                        terms_with_sim = dict(zip(term_l1['terms'], term_l1['similarities'][0]))
+                        logging.info(f"Terms (Method L0): {json.dumps(terms_with_sim, indent=4, ensure_ascii=False)}")
+                    else:
+                        logging.info(f"Terms (Method L0): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
 
                 elif cg_method == "semantic_search_l1":
@@ -196,8 +221,11 @@ class ConceptGrounding:
                         num_terms_to_retrieve=3,
                         similarity_threshold=None
                     )
-                    logging.info(f"Terms (Method L1): {term_l1}")
-
+                    if 'terms' in term_l1 and 'similarities' in term_l1:
+                        terms_with_sim = dict(zip(term_l1['terms'], term_l1['similarities'][0]))
+                        logging.info(f"Terms (Method L1): {json.dumps(terms_with_sim, indent=4, ensure_ascii=False)}")
+                    else:
+                        logging.info(f"Terms (Method L1): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
                 elif cg_method == "llm_search":
                     term_l1 = self.llm_oracle.concept_grounding_from_words(
@@ -208,8 +236,9 @@ class ConceptGrounding:
                     logging.info(f"Terms (Method LLM): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
 
-            nodes_l1_to_words_l0['explanation'][node] = {
-                "words_l0": terms_l0,
+            nodes_l1_to_words_l0['explanation'][node_index] = {
+                "words_l0": terms_l0_with_scores,
+                "l1_to_l2_assignments": sorted_l1_to_l2,
                 "words_cg_methods": terms_cg_methods
             }
 

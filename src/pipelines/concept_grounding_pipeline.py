@@ -20,8 +20,8 @@ from src.utils.general_utils import plot_multidigraph_to_pdf, setup_logging, loa
 
 
 def main():
-    LANG = "english"
-    #LANG = "italian"
+    LANG = "portuguese_voto"
+    # LANG = "italian"
     CONFIG = load_config(LANG, "src/utils/config.json")
 
     if LANG == "english":
@@ -31,13 +31,17 @@ def main():
         MODEL_PATH = f"models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
         EMBEDDING_PATH = "data/external/embeddings/enwiki_20180420_100d.bin"
         max_num_nodes = 1000
-    else:
+    elif LANG == "italian":
         DATASET = "Imprisonment-IT"
         max_num_nodes = 1000
         # MODEL_PATH = f"models/Imprisonment-IT_DiffPool_20250225_214311_lr1e-05_valmacrof1score0.6441_epoch035.pth"
         MODEL_PATH = f"models/grid_search/Imprisonment-IT/Imprisonment-IT_DiffPool_20250424_213829_lr0.0001_hd100_bs4_softmaxTrue_decrease_prop0.05_valmacrof1score0.7183_epoch027.pth"
         EMBEDDING_PATH = "data/external/embeddings/itwiki_20180420_100d.bin"
-
+    else:
+        MODEL_PATH = f"models/grid_search/STF_HC_Voto_Relatorio/best_model_20250829_234323_lk0.0_en0.0_rc0.0_ct0.0_bl1.0_rp0.0_l20.0.pth"
+        DATASET = "STF_HC_Voto_Relatorio"
+        max_num_nodes = 3000
+        EMBEDDING_PATH = 'data/external/embeddings/glove_legal_100.bin'
     setup_logging(log_file=f"cg_dataset_{DATASET}.log")
     logging.info(f"============  STARTING CG EXPERIMENT {DATASET}  ============")
     logging.info(f"CONFIG: \n{json.dumps(CONFIG, indent=3)}\n")
@@ -64,11 +68,11 @@ def main():
 
     # IMDB dims
     diffpool_model = DiffPool(
-        max_num_nodes=max_num_nodes,
+        max_num_nodes=3000,
         in_channels=100,
         hidden_channels=100,
         out_channels=2,
-        inner_channels=64,
+        inner_channels=32,
         softmax_assign=True,
         decrease_proportion=0.1,
     )
@@ -81,8 +85,8 @@ def main():
         split="test",
         batch_size=1,
         node_feature_size=100,
-        transform=T.ToDense(num_nodes=1000),
-        max_num_nodes=1000,
+        transform=T.ToDense(num_nodes=3000),
+        max_num_nodes=3000,
         lang=LANG
     )
 
@@ -125,7 +129,7 @@ def main():
             embedding_oracle=oracle,
             llm_oracle=llm_oracle,
             graph=data_element,
-            hyper_nodes_to_explain=50,
+            hyper_nodes_to_explain=5,
             nodes_per_hyper_node=5,
             original_raw_file_path=f"{ROOT}/test/raw/",
             language=LANG

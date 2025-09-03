@@ -256,12 +256,15 @@ class Text2DP(Text2Graph):
         self.spacy_models = {
             "italian": "it_core_news_lg",
             "english": "en_core_web_lg",
-            "portuguese": "pt_core_news_lg"
+            "portuguese": "pt_core_news_lg",
+            "portuguese_voto": "pt_core_news_lg",
         }
         self.embeddings_path = {
             "italian": "data/external/embeddings/itwiki_20180420_100d.bin",
             "english": "data/external/embeddings/enwiki_20180420_100d.bin",
-            "portuguese": "data/external/embeddings/glove_legal_100.bin"
+            "portuguese": "data/external/embeddings/glove_legal_100.bin",
+            "portuguese_voto": "data/external/embeddings/glove_legal_100.bin",
+
         }
 
         self.lang = lang

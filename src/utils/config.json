@@ -46,5 +46,21 @@
     "DATASET": "STF_HC",
     "LANG": "portuguese",
     "ROOT": "data/datasets/STF_HC"
+  },
+    "portuguese_voto": {
+    "EPOCHS": 30,
+    "PATIENCE": 15,
+    "LR": 0.005,
+    "LR_DECAY": 0,
+    "NODE_FEATURE_DIM": 100,
+    "HIDDEN_DIM": 100,
+    "NUM_NODES": 3000,
+    "INNER_DIM": 32,
+    "BATCH_SIZE": 32,
+    "SOFTMAX_ASSIGN": true,
+    "DECREASE_PROPORTION": 0.05,
+    "DATASET": "STF_HC_Voto_Relatorio",
+    "LANG": "portuguese",
+    "ROOT": "data/datasets/STF_HC_Voto_Relatorio"
   }
 }

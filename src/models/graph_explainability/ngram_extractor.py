@@ -94,6 +94,9 @@ class NGramExtractor:
         :return: A set of n-grams starting with the start_node, avoiding cycles.
         """
         ngrams = set()
+
+        start_node = start_node
+
         queue = deque([(start_node, [start_node])])  # (current_node, path)
 
         while queue:
@@ -109,6 +112,7 @@ class NGramExtractor:
 
             # Explore immediate neighbors, avoiding cycles
             for _, neighbor, _ in graph.out_edges(current_node, data=True):
+
                 if neighbor not in path:  # Prevent cycles by avoiding repeated words
                     queue.append((neighbor, path + [neighbor]))
 
@@ -148,6 +152,11 @@ class NGramExtractor:
 
         # print(f"Extracted {len(ngrams)} n-grams from graph (Doc ID: {doc_id}). Storing in EmbeddingOracle...")
 
+        ngrams = [
+            " ".join(word.split("::")[0] for word in text.split())
+            for text in ngrams
+        ]
+
         try:
             # Store n-grams in the EmbeddingOracle using bulk insertion
             self.embedding_oracle.add_terms_bulk(ngrams, batch_size=batch_size)
@@ -160,12 +169,16 @@ if __name__ == "__main__":
 
     NGRAM = 3
     BATCH_SIZE = 100000
-    DATASET = "IMDB"
+
+    language = "portuguese_voto"
+    DATASET = "STF_HC_Voto_Relatorio"
+    log_file = f"logs/embeddings_oracle_{DATASET}.log"
 
     # Initialize EmbeddingOracle (from your code)
-    model_path = 'data/external/embeddings/enwiki_20180420_100d.bin'
+    model_path = 'data/external/embeddings/glove_legal_100.bin'
     db_path = f'data/oracle/embeddings_{DATASET}.db'
     data_folder = f"data/datasets/{DATASET}/train/interim/"
+
     embedding_oracle = EmbeddingOracle(model_path=model_path, db_path=db_path)
 
     # Initialize the NGramExtractor

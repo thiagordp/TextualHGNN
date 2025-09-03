@@ -33,7 +33,8 @@ class LLMOracle(BaseOracle):
         # Hardcoded for now. Change later
         context = {
             "english": "Evaluations of movies",
-            "italian": "Decisioni della 'Corte di Cassazione' sulla custodia cautelare."
+            "italian": "Decisioni della 'Corte di Cassazione' sulla custodia cautelare.",
+            "portuguese_voto": "Decisões de Habeas Corpus contra prisão preventivas do Supremo Tribunal Federal."
         }
 
         words = ", ".join(words)
