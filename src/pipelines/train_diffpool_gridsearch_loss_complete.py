@@ -41,42 +41,42 @@ import random
 def generate_loss_configs(sample_size=100, seed=42):
     """
     Generates a structured and sampled grid of loss configurations.
-    The sampling is hierarchical, prioritizing simpler combinations of losses.
+    Each loss term can have its own set of possible magnitudes.
     """
     loss_terms = ["link", "entropy", "reconstruction", "contrastive", "balance", "repel"]
-    magnitudes = [1e-2, 1e-1, 1e0]
 
-    # Use a set to store unique configurations to avoid duplicates
-    # We store tuples of items to make them hashable
+    # Define possible values for each loss term separately
+    loss_values = {
+        "link": [10, 100, 1000],           # will also be scaled by 100
+        "entropy": [0.01, 0.1],
+        "reconstruction": [0.1, 1.0],
+        "contrastive": [0.01, 0.1],
+        "balance": [0.01, 0.1, 1.0],
+        "repel": [0.001, 0.01]
+    }
+
+    scale_loss = {}  # special scaling for 'link'
+
     generated_configs = []
-
-    # --- Hierarchical Generation ---
-    # The loop iterates from generating single active losses, to pairs, triples, etc.
     config_id = 1
 
-    scale_loss = {
-        "link": 100
-    }
+    # Hierarchical generation: from single loss terms to all terms active
     for k in range(1, len(loss_terms) + 1):
-        # 1. Get all combinations of k loss terms to activate
         for active_terms in itertools.combinations(loss_terms, k):
-            # 2. Get all weight combinations for the active terms
-            for weights in itertools.product(magnitudes, repeat=k):
-                # 3. Create the configuration dictionary
+            # Get all possible weight combinations for the active terms
+            term_values = [loss_values[term] for term in active_terms]
+            for weights in itertools.product(*term_values):
                 config = {term: 0.0 for term in loss_terms}
                 for i, term in enumerate(active_terms):
-                    # The 'link' loss is scaled by 100 as in the original setup
                     config[term] = weights[i] * scale_loss[term] if term in scale_loss else weights[i]
 
                 config['id'] = f"cfg_{config_id:05d}"
                 config['l2'] = 0.01
 
-                # Add the configuration to the set
                 generated_configs.append(config)
                 config_id += 1
 
-    # --- Convert set of tuples back to list of dictionaries ---
-    # Start with the baseline config
+    # Baseline configuration
     final_configs = [{
         "link": 0.0, "entropy": 0.0, "reconstruction": 0.0,
         "contrastive": 0.0, "balance": 0.0, "repel": 0.0, "l2": 0.01, "id": f"cfg_{0:05d}"
@@ -84,26 +84,21 @@ def generate_loss_configs(sample_size=100, seed=42):
 
     random.seed(seed)
     random.shuffle(generated_configs)
-
-    # Add the generated (non-baseline) configs
     final_configs.extend(generated_configs)
 
-    # --- Finalize and Sample ---
-    # If we generated more configs than needed, take a structured + random sample
+    # Sampling if too many configs
     if len(final_configs) > sample_size:
         baseline = final_configs[0]
-        num_isolated_combinations = len(loss_terms) * len(magnitudes)
-        isolated_configs = final_configs[1:num_isolated_combinations + 1]
-        # other_configs = final_configs[num_isolated_combinations + 1:]
-        # random.shuffle(other_configs)
+        num_isolated_combinations = sum(len(loss_values[term]) for term in loss_terms)
+        isolated_configs = final_configs[1:]
+        random.shuffle(isolated_configs)
 
-        # Reconstruct the list, ensuring the baseline is always first
-        sampled_configs = [baseline] + isolated_configs  # + other_configs[:sample_size - (num_isolated_combinations + 1)]
+        sampled_configs = [baseline] + isolated_configs[:num_isolated_combinations]
+
     else:
         sampled_configs = final_configs
 
     sampled_configs.sort(key=lambda x: x['id'])
-
     return sampled_configs
 
 

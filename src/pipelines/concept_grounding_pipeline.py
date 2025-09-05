@@ -19,30 +19,36 @@ from src.multi_graph.visualization import visualize_diffpool_explanation
 from src.utils.general_utils import plot_multidigraph_to_pdf, setup_logging, load_config
 
 
-def main():
-    LANG = "portuguese_voto"
-    # LANG = "italian"
-    CONFIG = load_config(LANG, "src/utils/config.json")
+LANG = "portuguese_voto"
+# LANG = "italian"
+CONFIG = load_config(LANG, "src/utils/config.json")
 
-    if LANG == "english":
-        DATASET = "IMDB"
-        # MODEL_PATH = f"models/IMDB_DiffPool_20250224_234935_lr1e-05_valmacrof1score0.8500_epoch011.pth"
-        # MODEL_PATH = f"models/IMDB_DiffPool_20250413_200733_lr0.0001_valmacrof1score0.8070_epoch097.pth"
-        MODEL_PATH = f"models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
-        EMBEDDING_PATH = "data/external/embeddings/enwiki_20180420_100d.bin"
-        max_num_nodes = 1000
-    elif LANG == "italian":
-        DATASET = "Imprisonment-IT"
-        max_num_nodes = 1000
-        # MODEL_PATH = f"models/Imprisonment-IT_DiffPool_20250225_214311_lr1e-05_valmacrof1score0.6441_epoch035.pth"
-        MODEL_PATH = f"models/grid_search/Imprisonment-IT/Imprisonment-IT_DiffPool_20250424_213829_lr0.0001_hd100_bs4_softmaxTrue_decrease_prop0.05_valmacrof1score0.7183_epoch027.pth"
-        EMBEDDING_PATH = "data/external/embeddings/itwiki_20180420_100d.bin"
-    else:
-        MODEL_PATH = f"models/grid_search/STF_HC_Voto_Relatorio/best_model_20250829_234323_lk0.0_en0.0_rc0.0_ct0.0_bl1.0_rp0.0_l20.0.pth"
-        DATASET = "STF_HC_Voto_Relatorio"
-        max_num_nodes = 3000
-        EMBEDDING_PATH = 'data/external/embeddings/glove_legal_100.bin'
-    setup_logging(log_file=f"cg_dataset_{DATASET}.log")
+if LANG == "english":
+    DATASET = "IMDB"
+    # MODEL_PATH = f"models/IMDB_DiffPool_20250224_234935_lr1e-05_valmacrof1score0.8500_epoch011.pth"
+    # MODEL_PATH = f"models/IMDB_DiffPool_20250413_200733_lr0.0001_valmacrof1score0.8070_epoch097.pth"
+    MODEL_PATH = f"models/grid_search/IMDB/IMDB_DiffPool_20250425_142400_lr0.005_hd100_bs64_softmaxTrue_decrease_prop0.1_valmacrof1score0.7986_epoch014.pth"
+    EMBEDDING_PATH = "data/external/embeddings/enwiki_20180420_100d.bin"
+    max_num_nodes = 1000
+elif LANG == "italian":
+    DATASET = "Imprisonment-IT"
+    max_num_nodes = 1000
+    # MODEL_PATH = f"models/Imprisonment-IT_DiffPool_20250225_214311_lr1e-05_valmacrof1score0.6441_epoch035.pth"
+    MODEL_PATH = f"models/grid_search/Imprisonment-IT/Imprisonment-IT_DiffPool_20250424_213829_lr0.0001_hd100_bs4_softmaxTrue_decrease_prop0.05_valmacrof1score0.7183_epoch027.pth"
+    EMBEDDING_PATH = "data/external/embeddings/itwiki_20180420_100d.bin"
+else:
+    # Best model
+    MODEL_PATH = f"models/grid_search/STF_HC_Voto_Relatorio/best_model_DiffPool_20250903_135039_lr0.0001_hd_32_bs4_dec0.1_lk10.0_en1.0_rc0.0_ct0.0_bl1.0_rp0.01_l20.01_rep02.pth"
+    # MODEL_PATH = f"models/grid_search/STF_HC_Voto_Relatorio/best_model_20250829_234323_lk1.0_en0.0_rc0.0_ct0.0_bl0.0_rp0.0_l20.0.pth"
+    DATASET = "STF_HC_Voto_Relatorio"
+    max_num_nodes = 3000
+    EMBEDDING_PATH = 'data/external/embeddings/glove_legal_100.bin'
+
+setup_logging(log_file=f"cg_dataset_{DATASET}_Diffpool.log")
+
+def main():
+
+
     logging.info(f"============  STARTING CG EXPERIMENT {DATASET}  ============")
     logging.info(f"CONFIG: \n{json.dumps(CONFIG, indent=3)}\n")
     logging.info(f"MODEL CHECKPOINT: {MODEL_PATH}")
@@ -52,7 +58,7 @@ def main():
     EMBEDDINGS_DATABASE_PATH = f"data/oracle/embeddings_{DATASET}.db"
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ROOT = f"data/datasets/{DATASET}"
-    DOCUMENTS_TO_EXPLAIN = 2
+    DOCUMENTS_TO_EXPLAIN = 10
 
     # TODO: check the inputs below based on the loaded model.
     # Imprisonment dims
@@ -145,15 +151,15 @@ def main():
 
             os.makedirs(output_path, exist_ok=True)
             cg.save_explanation(Path(output_path) / f"{cg.data_sample_id}.json")
-            interactive_output_path = Path(output_path) / f"{cg.data_sample_id}_visualization.html"
-
-            # In pipelines/concept_grounding_pipeline.py
-            visualize_diffpool_explanation(
-                cg=cg,
-                nx_graph=graph,
-                output_filename=str(interactive_output_path),
-                assignment_threshold=0.1  # Example of using the new parameter
-            )
+            # interactive_output_path = Path(output_path) / f"{cg.data_sample_id}_visualization.html"
+            #
+            # # In pipelines/concept_grounding_pipeline.py
+            # visualize_diffpool_explanation(
+            #     cg=cg,
+            #     nx_graph=graph,
+            #     output_filename=str(interactive_output_path),
+            #     assignment_threshold=0.1  # Example of using the new parameter
+            # )
 
 
 def retrieve_graph(list_of_paths_to_graphs, sample_id, output_path) -> nx.MultiDiGraph | None:

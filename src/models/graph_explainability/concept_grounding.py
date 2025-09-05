@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 
+import spacy
 import torch
 from matplotlib import pyplot as plt
 from torch_geometric.data import Data
@@ -36,6 +37,13 @@ class ConceptGrounding:
         self.raw_file_path = Path(original_raw_file_path)
         self.raw_file_content = None
         self.language = language
+        self.spacy_models = {
+            "italian": "it_core_news_lg",
+            "english": "en_core_web_lg",
+            "portuguese": "pt_core_news_lg",
+            "portuguese_voto": "pt_core_news_lg",
+        }
+        self.nlp = spacy.load(self.spacy_models[self.language])
 
         self._init_model()
 
@@ -75,7 +83,7 @@ class ConceptGrounding:
         self.raw_file_content = open(self.raw_file_path / f"{label}/{self.data_sample_id}.txt", "r").read().strip()
 
         # Preprocess and print the document content
-        preprocessed_content = preprocessing_legal_pt(self.raw_file_content)
+        preprocessed_content = preprocessing_legal_pt(self.raw_file_content, self.nlp)
         logging.info(f"--- Preprocessed Document Content ---")
         logging.info(preprocessed_content)
         logging.info(f"------------------------------------")
@@ -167,7 +175,7 @@ class ConceptGrounding:
 
     def concept_grounding(self):
 
-        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(l1_threshold=0.1,
+        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(l1_threshold=0.5,
                                                                                          l0_threshold=0.1)
         nodes_l1_to_words_l0 = {'explanation': {}}
 
@@ -187,7 +195,7 @@ class ConceptGrounding:
             # New: Log L1 to L2 assignment values, sorted
             l1_to_l2_assignments = self.s12[node_index, :].tolist()
             sorted_l1_to_l2 = sorted(l1_to_l2_assignments, reverse=True)
-            logging.info(f"L1 Node {node_index} to L2 assignments (sorted): {sorted_l1_to_l2}")
+            #logging.info(f"L1 Node {node_index} to L2 assignments (sorted): {sorted_l1_to_l2}")
 
             terms_l0 = list(terms_l0_with_scores.keys())
 
@@ -233,8 +241,13 @@ class ConceptGrounding:
                         num_terms_to_retrieve=3,
                         similarity_threshold=0.9
                     )
-                    logging.info(f"Terms (Method LLM): {term_l1}")
+                    if 'terms' in term_l1 and 'similarities' in term_l1:
+                        terms_with_sim = dict(zip(term_l1['terms'], term_l1['similarities']))
+                        logging.info(f"Terms (Method LLM): {json.dumps(terms_with_sim, indent=4, ensure_ascii=False)}")
+                    else:
+                        logging.info(f"Terms (Method LLM): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
+
 
             nodes_l1_to_words_l0['explanation'][node_index] = {
                 "words_l0": terms_l0_with_scores,

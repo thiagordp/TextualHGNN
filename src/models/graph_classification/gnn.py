@@ -152,8 +152,8 @@ class DiffPool(GNN):
         #self.gnn3_embed = GraphSAGE(hidden_channels, inner_channels, hidden_channels)
 
         # --- Classifier ---
-        self.lin1 = torch.nn.Linear(hidden_channels, hidden_channels)
-        self.lin2 = torch.nn.Linear(hidden_channels, out_channels)
+        self.lin1 = torch.nn.Linear(hidden_channels, inner_channels)
+        self.lin2 = torch.nn.Linear(inner_channels, out_channels)
         self.softmax_assign = softmax_assign
 
     def forward(self, x, adj, mask=None, debug=False):
