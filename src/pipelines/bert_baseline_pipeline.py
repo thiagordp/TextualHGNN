@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler("logs/bert_training.log"),
+        logging.FileHandler("logs/bert_training_STF_Voto_relatorio.log"),
         logging.StreamHandler()
     ]
 )
@@ -164,7 +164,6 @@ def main(args):
 
     logging.info("Loading tokenizer and encoding labels...")
     model_name = "allenai/longformer-base-4096"
-    # model_name = "joelito/legal-xlm-longformer-base"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     all_labels = sorted(os.listdir(args.train_dir))
@@ -177,8 +176,8 @@ def main(args):
     test_ds = TextFolderDataset(args.test_dir, tokenizer, label_encoder)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size * 4, num_workers=8, pin_memory=True) 
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size * 4, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=8, pin_memory=True)
+    test_loader = DataLoader(test_ds, batch_size=args.batch_size, num_workers=8, pin_memory=True)
 
     # Calculate class weights
     class_weights = compute_class_weight(
@@ -203,9 +202,9 @@ def main(args):
     trainable_params = [name for name, p in model.named_parameters() if p.requires_grad]
     logging.info(f"Trainable parameters: {trainable_params}")
 
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     num_training_steps = len(train_loader) * args.epochs
-    scheduler = get_scheduler("linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
+    scheduler = get_scheduler("linear", optimizer=optimizer, num_warmup_steps=10, num_training_steps=num_training_steps)
 
     logging.info("Starting training...")
     model = train(model, train_loader, val_loader, optimizer, scheduler, device, class_weights, patience=args.patience,
@@ -221,9 +220,9 @@ if __name__ == '__main__':
     parser.add_argument('--val_dir', type=str, required=True)
     parser.add_argument('--test_dir', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--lr', type=float, default=2e-3)
-    parser.add_argument('--patience', type=int, default=1)
+    parser.add_argument('--patience', type=int, default=2)
     args = parser.parse_args()
 
     main(args)

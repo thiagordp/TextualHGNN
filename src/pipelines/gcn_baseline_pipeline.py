@@ -26,17 +26,16 @@ else:
 EPOCHS = 100
 PATIENCE = 20
 TRAIN_SIZE = 0.7
-CLASS_WEIGHTS =  [0.58423326, 3.46794872]
-LR = 1e-3
+CLASS_WEIGHTS = [0.7109853029251099, 1.6849168539047241]
+LR = 1e-4
 NODE_FEATURE_DIM = HIDDEN_DIM = 100
-ROOT = "data/datasets/Imprisonment-IT"
-NUM_NODES = 1000
-BATCH_SIZE = 32
+DATASET = "STF_HC_Voto_Relatorio"
+ROOT = f"data/datasets/{DATASET}"
+NUM_NODES = 3000
+BATCH_SIZE = 4
 
-setup_logging(log_file=f"training_model_experiment_gcn_Imprisonment-IT.log")
-logging.info(f"============  STARTING EXPERIMENT Imprisonment-IT  ============")
-
-
+setup_logging(log_file=f"training_model_experiment_gcn_{DATASET}.log")
+logging.info(f"============  STARTING EXPERIMENT {DATASET}  ============")
 
 
 def train(model, loader, optimizer, loss_fn, return_acc=False):
@@ -297,7 +296,7 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim):
     ).to(DEVICE)
 
     logging.info(f"Number of parameters: {model.num_parameters}")
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1)
 
     return model, optimizer
 
@@ -333,10 +332,20 @@ def train_and_validate(model, train_loader, val_loader, optimizer, loss_fn, pati
         val_acc, val_macro_f1, _, _, val_loss = test(model, val_loader, loss_fn, )
         train_acc, train_macro_f1, _, _, _ = test(model, train_loader, loss_fn, )
 
+        with torch.no_grad():
+            total_params = 0
+            sum_abs_params = 0.0
+            for param in model.parameters():
+                if param.requires_grad:
+                    total_params += param.numel()
+                    sum_abs_params += torch.sum(torch.abs(param.data)).item()
+        avg_abs_param = sum_abs_params / total_params if total_params > 0 else 0
+
         writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Accuracy/train', train_acc, epoch)
         writer.add_scalar('Loss/val', val_loss, epoch)
         writer.add_scalar('Accuracy/val', val_acc, epoch)
+        writer.add_scalar('Metrics/Avg_Abs_Param', avg_abs_param, epoch)
 
         if val_macro_f1 > best_val_f1:
             best_val_f1 = val_macro_f1
@@ -348,9 +357,8 @@ def train_and_validate(model, train_loader, val_loader, optimizer, loss_fn, pati
             best_model_path = f'models/{model_name}_{timestamp}_lr{lr}_valmacrof1score{best_val_f1:.4f}_epoch{best_epoch:03d}.pth'
             torch.save(model.state_dict(), best_model_path)
 
-        logging.info(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, '
-              f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}, '
-              f'Val Macro F1: {val_macro_f1:.4f}')
+        logging.info(
+            f'Epoch: {epoch:03d} | Train Loss: {train_loss:.4f} | Val Macro F1: {val_macro_f1:.4f} | Avg Abs Param: {avg_abs_param:.4f}')
 
         times.append(time.time() - start_time)
 
@@ -390,11 +398,12 @@ def evaluate_model(model, loader, loss_fn, dataset_name):
         target_names=[str(i) for i in range(len(set(true_labels)))],
         digits=4,
     )
-    logging.info(f"\n{dataset_name} Classification Report:\n{report}" )
+    logging.info(f"\n{dataset_name} Classification Report:\n{report}")
 
     cm = confusion_matrix(true_labels, pred_labels)
     logging.info(f"\n{dataset_name} Confusion Matrix:")
     logging.info(cm)
+
 
 def custom_collate_fn(batch):
     # Assuming your data is a list of tensors
@@ -402,6 +411,7 @@ def custom_collate_fn(batch):
     max_len = max(data.size(1) for data in batch)
     padded_batch = [torch.nn.functional.pad(data, (0, max_len - data.size(1))) for data in batch]
     return torch.stack(padded_batch)
+
 
 def main():
     """
@@ -435,7 +445,7 @@ def main():
 
     # Define loss function
     class_weights = torch.tensor(CLASS_WEIGHTS, device=DEVICE, dtype=torch.float)
-    logging.info("Class weights:", class_weights)
+    logging.info(f"Class weights: {class_weights}")
     loss_fn = nn.NLLLoss(weight=class_weights)
 
     # Train and validate the model

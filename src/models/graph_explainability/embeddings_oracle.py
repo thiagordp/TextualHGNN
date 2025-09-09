@@ -1,6 +1,6 @@
 import random
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+
 
 import numpy as np
 from typing import List, Tuple, Dict
@@ -15,7 +15,7 @@ import torch
 
 from src.models.graph_explainability.base_oracle import BaseOracle
 
-logger = logging.getLogger(__name__)
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -389,21 +389,21 @@ def main_english():
     language = "english"
     DATASET = "IMDB"
 
-    logger.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
+    logging.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
 
     model_path = 'data/external/embeddings/enwiki_20180420_100d.bin'
     db_path = f"data/oracle/embeddings_{DATASET}.db"
 
     # Initialize the EmbeddingOracle
-    logger.info("Initializing EmbeddingOracle...")
+    logging.info("Initializing EmbeddingOracle...")
     start_time = time.time()
     embedding_oracle = EmbeddingOracle(model_path=model_path, db_path=db_path)
-    logger.info(f"EmbeddingOracle initialized in {time.time() - start_time:.2f}s")
+    logging.info(f"EmbeddingOracle initialized in {time.time() - start_time:.2f}s")
 
     # Test adding new terms
     test_terms = ["corte di cassazione"]
     for term in test_terms:
-        logger.info(f"Adding term: {term}")
+        logging.info(f"Adding term: {term}")
         embedding_oracle.add_term(term)
 
     # Test bulk addition of terms
@@ -411,49 +411,49 @@ def main_english():
         "machine learning", "deep learning", "artificial intelligence",
         "natural language processing", "computer vision"
     ]
-    logger.info(f"Bulk adding {len(terms_to_add)} terms...")
+    logging.info(f"Bulk adding {len(terms_to_add)} terms...")
     start_time = time.time()
     embedding_oracle.add_terms_bulk(terms_to_add, batch_size=5000)
-    logger.info(f"Bulk addition completed in {time.time() - start_time:.2f}s")
+    logging.info(f"Bulk addition completed in {time.time() - start_time:.2f}s")
 
     # Test retrieving embedding for a term
     test_term = "artificial intelligence"
-    logger.info(f"Retrieving embedding for term: {test_term}")
+    logging.info(f"Retrieving embedding for term: {test_term}")
     embedding = embedding_oracle.retrieve_embedding(test_term)
     if embedding is not None:
-        logger.info(f"Embedding for '{test_term}': {embedding[:5]}... (truncated)")
+        logging.info(f"Embedding for '{test_term}': {embedding[:5]}... (truncated)")
 
     # Test retrieving top-k similar terms by string
     test_query_term = "apple"
     k = 10
-    logger.info(f"Retrieving top-{k} similar terms to '{test_query_term}' by string...")
+    logging.info(f"Retrieving top-{k} similar terms to '{test_query_term}' by string...")
     start_time = time.time()
     top_k_by_string = embedding_oracle.retrieve_top_k_by_string(test_query_term, k=k)
-    logger.info(f"Top {k} terms similar to '{test_query_term}': {top_k_by_string}")
-    logger.info(f"Retrieved in {time.time() - start_time:.2f}s")
+    logging.info(f"Top {k} terms similar to '{test_query_term}': {top_k_by_string}")
+    logging.info(f"Retrieved in {time.time() - start_time:.2f}s")
 
     # Test retrieving top-k similar terms by embedding
     if embedding is not None:
-        logger.info(f"Retrieving top-{k} similar terms by embedding...")
+        logging.info(f"Retrieving top-{k} similar terms by embedding...")
         start_time = time.time()
         top_k_by_embeddings = embedding_oracle.retrieve_top_k_by_embeddings(embedding, k=k)
-        logger.info(f"Top {k} terms similar to the embedding of '{test_term}': {top_k_by_embeddings}")
-        logger.info(f"Retrieved in {time.time() - start_time:.2f}s")
+        logging.info(f"Top {k} terms similar to the embedding of '{test_term}': {top_k_by_embeddings}")
+        logging.info(f"Retrieved in {time.time() - start_time:.2f}s")
 
     # Test retrieving the most similar term to a list of terms
     terms_list = ["apple", "banana", "fruit"]
-    logger.info(f"Retrieving most similar terms to the list: {terms_list}")
+    logging.info(f"Retrieving most similar terms to the list: {terms_list}")
     start_time = time.time()
     most_similar_to_list = embedding_oracle.retrieve_most_similar_to_list(terms_list, k=k)
-    logger.info(f"Most similar terms to the list {terms_list}: {most_similar_to_list}")
-    logger.info(f"Retrieved in {time.time() - start_time:.2f}s")
+    logging.info(f"Most similar terms to the list {terms_list}: {most_similar_to_list}")
+    logging.info(f"Retrieved in {time.time() - start_time:.2f}s")
 
     # Performance and Memory Check
     if torch.cuda.is_available():
         gpu_memory = torch.cuda.memory_allocated() / (1024 ** 2)
-        logger.info(f"GPU Memory Usage: {gpu_memory:.2f} MB")
+        logging.info(f"GPU Memory Usage: {gpu_memory:.2f} MB")
 
-    logger.info(f"==================== END OF EMBEDDINGS ORACLE TEST: {DATASET} ====================")
+    logging.info(f"==================== END OF EMBEDDINGS ORACLE TEST: {DATASET} ====================")
 
 
 def main_italian():
@@ -461,21 +461,21 @@ def main_italian():
     language = "italian"
     DATASET = "Imprisonment-IT"
 
-    logger.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
+    logging.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
 
     model_path = 'data/external/embeddings/itwiki_20180420_100d.bin'
     db_path = f"data/oracle/embeddings_{DATASET}.db"
 
     # Inizializza l'EmbeddingOracle
-    logger.info("Inizializzazione di EmbeddingOracle...")
+    logging.info("Inizializzazione di EmbeddingOracle...")
     start_time = time.time()
     embedding_oracle = EmbeddingOracle(model_path=model_path, db_path=db_path)
-    logger.info(f"EmbeddingOracle inizializzato in {time.time() - start_time:.2f}s")
+    logging.info(f"EmbeddingOracle inizializzato in {time.time() - start_time:.2f}s")
 
     # Test aggiunta di nuovi termini
     test_terms = ["corte di cassazione", "diritto amministrativo", "giurisprudenza italiana"]
     for term in test_terms:
-        logger.info(f"Aggiunta del termine: {term}")
+        logging.info(f"Aggiunta del termine: {term}")
         embedding_oracle.add_term(term)
 
     # Test aggiunta in blocco di termini
@@ -483,49 +483,49 @@ def main_italian():
         "apprendimento automatico", "rete neurale", "intelligenza artificiale",
         "elaborazione del linguaggio naturale", "visione artificiale"
     ]
-    logger.info(f"Aggiunta in blocco di {len(terms_to_add)} termini...")
+    logging.info(f"Aggiunta in blocco di {len(terms_to_add)} termini...")
     start_time = time.time()
     embedding_oracle.add_terms_bulk(terms_to_add, batch_size=5000)
-    logger.info(f"Aggiunta in blocco completata in {time.time() - start_time:.2f}s")
+    logging.info(f"Aggiunta in blocco completata in {time.time() - start_time:.2f}s")
 
     # Test recupero dell'embedding per un termine
     test_term = "intelligenza artificiale"
-    logger.info(f"Recupero dell'embedding per il termine: {test_term}")
+    logging.info(f"Recupero dell'embedding per il termine: {test_term}")
     embedding = embedding_oracle.retrieve_embedding(test_term)
     if embedding is not None:
-        logger.info(f"Embedding per '{test_term}': {embedding[:5]}... (troncato)")
+        logging.info(f"Embedding per '{test_term}': {embedding[:5]}... (troncato)")
 
     # Test recupero dei primi-k termini simili per stringa
     test_query_term = "mela"
     k = 10
-    logger.info(f"Recupero dei primi {k} termini simili a '{test_query_term}' per stringa...")
+    logging.info(f"Recupero dei primi {k} termini simili a '{test_query_term}' per stringa...")
     start_time = time.time()
     top_k_by_string = embedding_oracle.retrieve_top_k_by_string(test_query_term, k=k)
-    logger.info(f"Primi {k} termini simili a '{test_query_term}': {top_k_by_string}")
-    logger.info(f"Recuperato in {time.time() - start_time:.2f}s")
+    logging.info(f"Primi {k} termini simili a '{test_query_term}': {top_k_by_string}")
+    logging.info(f"Recuperato in {time.time() - start_time:.2f}s")
 
     # Test recupero dei primi-k termini simili per embedding
     if embedding is not None:
-        logger.info(f"Recupero dei primi {k} termini simili per embedding...")
+        logging.info(f"Recupero dei primi {k} termini simili per embedding...")
         start_time = time.time()
         top_k_by_embeddings = embedding_oracle.retrieve_top_k_by_embeddings(embedding, k=k)
-        logger.info(f"Primi {k} termini simili all'embedding di '{test_term}': {top_k_by_embeddings}")
-        logger.info(f"Recuperato in {time.time() - start_time:.2f}s")
+        logging.info(f"Primi {k} termini simili all'embedding di '{test_term}': {top_k_by_embeddings}")
+        logging.info(f"Recuperato in {time.time() - start_time:.2f}s")
 
     # Test recupero del termine più simile a una lista di termini
     terms_list = ["mela", "banana", "frutta"]
-    logger.info(f"Recupero dei termini più simili alla lista: {terms_list}")
+    logging.info(f"Recupero dei termini più simili alla lista: {terms_list}")
     start_time = time.time()
     most_similar_to_list = embedding_oracle.retrieve_most_similar_to_list(terms_list, k=k)
-    logger.info(f"Termini più simili alla lista {terms_list}: {most_similar_to_list}")
-    logger.info(f"Recuperato in {time.time() - start_time:.2f}s")
+    logging.info(f"Termini più simili alla lista {terms_list}: {most_similar_to_list}")
+    logging.info(f"Recuperato in {time.time() - start_time:.2f}s")
 
     # Controllo delle prestazioni e della memoria
     if torch.cuda.is_available():
         gpu_memory = torch.cuda.memory_allocated() / (1024 ** 2)
-        logger.info(f"Utilizzo della memoria GPU: {gpu_memory:.2f} MB")
+        logging.info(f"Utilizzo della memoria GPU: {gpu_memory:.2f} MB")
 
-    logger.info(f"==================== FINE DEL TEST EMBEDDINGS ORACLE: {DATASET} ====================")
+    logging.info(f"==================== FINE DEL TEST EMBEDDINGS ORACLE: {DATASET} ====================")
 
 
 if __name__ == '__main__':

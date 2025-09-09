@@ -44,10 +44,6 @@ load_dotenv()
 
 MAX_CORPUS_SIZE = int(os.environ.get("MAX_CORPUS_SIZE")) if os.environ.get("MAX_CORPUS_SIZE") else 5
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 nltk.download('punkt')
 
 
@@ -339,7 +335,7 @@ class Text2DP(Text2Graph):
             nx.MultiDiGraph: The enriched Knowledge Graph representation of the parsed document.
         """
         if not text or not text.strip():
-            logger.warning("Input text is empty or contains only whitespace. Skipping.")
+            logging.warning("Input text is empty or contains only whitespace. Skipping.")
             return None
 
         if preprocessing_fn:
@@ -355,7 +351,7 @@ class Text2DP(Text2Graph):
 
         # After edges are added
         if graph.number_of_nodes() > self.max_num_nodes * 1000:
-            logger.warning(
+            logging.warning(
                 f"Graph grew too large ({graph.number_of_nodes()} nodes > {self.max_num_nodes}). Skipping graph.")
             return None
 
@@ -567,7 +563,7 @@ class Text2GraphDataset:
 
         print("Plotting")
 
-        logger.info("Plotting")
+        logging.info("Plotting")
 
         # Iterate over each graph
         for idx, graph_tuple in tqdm(enumerate(graphs)):
@@ -576,12 +572,12 @@ class Text2GraphDataset:
             output_path_dot = output_folder / f"graph_{proc_number}.dot"
             output_path_png = output_folder / f"graph_{proc_number}.png"
 
-            logger.info(f"Proc: {proc_number},\tLabel: {label}\tImage: {output_path_png}")
+            logging.info(f"Proc: {proc_number},\tLabel: {label}\tImage: {output_path_png}")
 
             try:
                 _save_graphviz_graph(G, output_path_dot, output_path_png)
             except Exception as e:
-                logger.error(f"Error while export graphviz: {e}. Saving using NetworkX.")
+                logging.error(f"Error while export graphviz: {e}. Saving using NetworkX.")
                 _save_nx_graph(G, output_path_png)
 
     def build_pyg_dataset_individual(self, input_filename=None, parsed_graphs=None, output_path=None, batch_index=0):

@@ -213,7 +213,7 @@ class ConceptGrounding:
                 elif cg_method == "semantic_search_l0":
                     term_l1 = self.embedding_oracle.concept_grounding_from_words(
                         terms_l0,
-                        num_terms_to_retrieve=3,
+                        num_terms_to_retrieve=1,
                         similarity_threshold=0.9999
                     )
                     if 'terms' in term_l1 and 'similarities' in term_l1:
@@ -226,7 +226,7 @@ class ConceptGrounding:
                 elif cg_method == "semantic_search_l1":
                     term_l1 = self.embedding_oracle.concept_grounding_from_embeddings(
                         hyper_node,
-                        num_terms_to_retrieve=3,
+                        num_terms_to_retrieve=1,
                         similarity_threshold=None
                     )
                     if 'terms' in term_l1 and 'similarities' in term_l1:
@@ -238,7 +238,7 @@ class ConceptGrounding:
                 elif cg_method == "llm_search":
                     term_l1 = self.llm_oracle.concept_grounding_from_words(
                         terms_l0,
-                        num_terms_to_retrieve=3,
+                        num_terms_to_retrieve=1,
                         similarity_threshold=0.9
                     )
                     if 'terms' in term_l1 and 'similarities' in term_l1:

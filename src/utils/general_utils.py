@@ -45,6 +45,8 @@ def setup_logging(log_folder='logs', log_file='diffpool_training.log'):
             logging.StreamHandler()
         ]
     )
+    logging.info(f"Setting up logging in {log_path}")
+
 def plot_multidigraph_to_pdf(G: nx.MultiDiGraph, output_path: str = None, open_pdf: bool = True) -> str:
     """
     Plots a NetworkX MultiDiGraph using GraphViz, saves it as a PDF, and optionally opens it.

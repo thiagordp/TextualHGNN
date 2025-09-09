@@ -53,8 +53,6 @@ torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView, MultiAdja
 import logging
 import time
 
-logger = logging.getLogger(__name__)
-
 
 class TextGraphDatasetOnDisk(OnDiskDataset):
     split_mapping = {
@@ -223,11 +221,11 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
         )
 
     def process_text2graph(self, input_path=None, output_path=None, batch_size=1000):
-        logger.info(f"Starting Text->Graph processing for {self.split} split...")
+        logging.info(f"Starting Text->Graph processing for {self.split} split...")
         start_time = time.time()
 
-        logger.info(f"Input Path: {input_path}, Output Path: {output_path}")
-        logger.info(f"Batch Size: {batch_size}")
+        logging.info(f"Input Path: {input_path}, Output Path: {output_path}")
+        logging.info(f"Batch Size: {batch_size}")
 
         text_to_graph_dp = Text2GraphDataset(
             text_to_graph_parser=self.text2graph_parser,
@@ -237,12 +235,12 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
 
         text_to_graph_dp.load_corpus()
         total_samples = len(text_to_graph_dp.corpus)
-        logger.info(f"Total samples to process: {total_samples}")
+        logging.info(f"Total samples to process: {total_samples}")
 
         # Process in batches of 5000
         for batch_index, start_idx in enumerate(range(0, total_samples, batch_size)):
             end_idx = min(start_idx + batch_size, total_samples)
-            logger.info(f"Processing batch {batch_index} from {start_idx} to {end_idx}...")
+            logging.info(f"Processing batch {batch_index} from {start_idx} to {end_idx}...")
 
             batch_corpus = text_to_graph_dp.corpus[start_idx:end_idx]
             parsed_graphs = text_to_graph_dp.parse(batch_corpus)
@@ -253,7 +251,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
                 batch_index=batch_index  # Pass the batch index for unique file naming
             )
 
-        logger.info(f"Text->Graph processing completed in {time.time() - start_time:.2f}s")
+        logging.info(f"Text->Graph processing completed in {time.time() - start_time:.2f}s")
 
     def load_metadata_and_encoder(self, target_path):
 

@@ -14,12 +14,11 @@ logging.basicConfig(
         logging.FileHandler(log_file)  # File output
     ]
 )
-logger = logging.getLogger(__name__)
 
 def main():
 
 
-    logger.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
+    logging.info(f"==================== START OF NEW EMBEDDINGS ORACLE: {DATASET} ====================")
 
     model_path = 'data/external/embeddings/glove_legal_100.bin'
     db_path = f"data/oracle/embeddings_{DATASET}.db"
