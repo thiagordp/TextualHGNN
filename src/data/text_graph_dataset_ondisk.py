@@ -48,6 +48,9 @@ from tqdm import tqdm
 
 from src.data.text_graph_dataset_parsers import Text2DP, Text2GraphDataset
 from networkx.classes.coreviews import MultiAdjacencyView
+
+from src.data.utils import log_corpus_oov_statistics
+
 torch.serialization.add_safe_globals([MultiDiGraph, DiMultiDegreeView, MultiAdjacencyView, OutMultiEdgeView])
 
 import logging
@@ -70,7 +73,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
             pre_filter: Optional[Callable] = None,
             backend: str = 'sqlite',
             node_feature_size: int = 768,
-            max_num_nodes: int=1100,
+            max_num_nodes: int = 1100,
             batch_size: int = 16,
             lang="english"
     ):
@@ -207,12 +210,20 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
             output_path=output_dir
         )
 
+        unk_vocab, known_vocab = self.text2graph_parser.text_embedding.retrieve_vocab_known_and_unk()
+        vocabulary = {**unk_vocab, **known_vocab}
+
+        print(f"Number of unique words in vocabulary: {len(vocabulary)}")
+        log_corpus_oov_statistics(unk_vocab, vocabulary)
+        print("UNK tokens")
+        print(unk_vocab)
+
         input_dir = osp.join(self.interim_dir)
         output_dir = osp.join(self.processed_dir)
 
         os.makedirs(input_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
-        
+
         print("Graph->Dataset Parsing")
         self.process_graph2dataset(
             input_path=input_dir,
@@ -283,7 +294,6 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
             except ValueError as e:
                 print(f"Error while reading doc in {data_path}. Exception: {e}")
                 continue
-
 
             data = from_networkx(graph_nx).cpu()
 

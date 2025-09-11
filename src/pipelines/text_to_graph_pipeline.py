@@ -10,9 +10,9 @@ from src.utils.general_utils import format_time_elapsed
 
 # Set up logging
 # DATASET = "IMDB"
-DATASET = "Imprisonment-IT"
+DATASET = "STF_HC_Voto_Relatorio"
 # LANG = "english"
-LANG = "italian"
+LANG = "portuguese_voto"
 
 ROOT = f"data/datasets/{DATASET}"
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

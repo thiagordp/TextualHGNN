@@ -19,6 +19,9 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import MultinomialNB
 from xgboost import XGBClassifier
+import spacy
+
+from src.data.preprocessing import preprocessing_legal_pt_voto_relatorio
 
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.metrics import classification_report
@@ -53,7 +56,7 @@ import logging
 
 # Define the path to the dataset
 # DATASET = "Imprisonment-IT"
-DATASET="IMDB"
+DATASET="STF_HC_Voto_Relatorio"
 dataset_path = f"data/datasets/{DATASET}"
 LANG = "english"
 
@@ -167,29 +170,26 @@ def preprocess_text(text: str) -> str:
 
 # Apply preprocessing
 start_time = time.time()
-df['text'] = df['text'].apply(preprocess_text)
-logging.info(f"Preprocessing {format_time_elapsed(start_time)}")
 
+df['text'] = df['text'].apply(lambda x: preprocessing_legal_pt_voto_relatorio(x))
+
+logging.info(f"Preprocessing {format_time_elapsed(start_time)}")
 
 # Separate data by split
 train_data = df[df['split'] == 'train']
 validation_data = df[df['split'] == 'validation']
 test_data = df[df['split'] == 'test']
 
-
 # Vectorization using TF-IDF
 tfidf_vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1,2))
-
 
 # Fit on training data and transform all splits
 X_train = tfidf_vectorizer.fit_transform(train_data['text'])
 X_val = tfidf_vectorizer.transform(validation_data['text'])
 X_test = tfidf_vectorizer.transform(test_data['text'])
 
-
 # Initialize the Label Encoder
 label_encoder = LabelEncoder()
-
 
 # Fit and transform the labels for each split
 y_train = label_encoder.fit_transform(train_data['label'])
@@ -197,8 +197,6 @@ y_val = label_encoder.transform(validation_data['label'])
 y_test = label_encoder.transform(test_data['label'])
 
 logging.info(f"Classes found by LabelEncoder: {label_encoder.classes_}")
-
-
 
 # Define models and their hyperparameters for grid search
 models = {
@@ -275,8 +273,10 @@ models = {
     # }),
     'XGBoost': (XGBClassifier(eval_metric='logloss'), {
         'n_estimators': [50, 100, 200],
-        'learning_rate': [0.001, 0.01, 0.1, 0.5, 1],
-        'max_depth': [3, 5, 7, 10],
+        'learning_rate': [0.001, 0.01, 0.1],
+        'max_depth': [3, 5, 7,10],
+        "reg_lambda": [0.5, 1.0],  # L2 regularization
+        "reg_alpha": [0.01, 0.1],   # L1 regularization
         # 'min_child_weight': [1, 3, 5],
         # 'gamma': [0, 0.1, 0.2, 0.3],
         # 'subsample': [0.5, 0.7, 1.0],
