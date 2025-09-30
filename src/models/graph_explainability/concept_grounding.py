@@ -22,8 +22,8 @@ class ConceptGrounding:
                  embedding_oracle: EmbeddingOracle,
                  llm_oracle: LLMOracle,
                  graph: Data,
-                 hyper_nodes_to_explain: int = 10,
-                 nodes_per_hyper_node: int = 5,
+                 hyper_nodes_to_explain: int | None = 10,
+                 nodes_per_hyper_node: int | None = 5,
                  original_raw_file_path: str = "",
                  language: str = "english"
                  ):
@@ -67,9 +67,32 @@ class ConceptGrounding:
         self.adj_l1 = adj_l1.squeeze(0)
         self.x_l2 = x_l2.squeeze(0)
         self.adj_l2 = adj_l2.squeeze(0)
-        self.y_pred = torch.argmax(y_pred, dim=1).item()
+
+        self.l0_names = [str(i) for i in range(self.x_l0.shape[0])]
+        self.l1_names = [str(i) for i in range(self.x_l1.shape[0])]
+
         self.y_test = int.from_bytes(self.graph.y, byteorder='little')
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.y_pred = y_pred.max(dim=1)[1].cpu()
+
+        y_tensor = self.graph.y
+        if isinstance(y_tensor, list):
+            y_tensor = torch.tensor(y_tensor, device=self.device, dtype=torch.float)
+
+        # Convert one-hot labels to class indices
+        if y_tensor.ndim > 1 and y_tensor.shape[1] > 1:
+            y_indices = y_tensor.sum(dim=1)
+        elif y_tensor.shape[0] > 1:
+            y_indices = y_tensor.sum(dim=0)
+        else:
+            y_indices = y_tensor.long()  # Ensure it's integer type
+
+        print("=" * 80)
+        print(y_indices, y_indices.ndim, type(y_indices))
+        print("=" * 80)
+
+        self.y_test = int(y_indices.view(-1).cpu())
 
         # Hardcoded for now.
         if self.language == 'english':
@@ -97,7 +120,7 @@ class ConceptGrounding:
         top_assignments_s12, top_nodes_s12 = self._get_top_most_nodes(layer=1, k=10)
 
     def retrieve_relevant_hypernodes_and_corresponding_nodes(self, l1_threshold: float = 0.5,
-                                                             l0_threshold: float = 0.5):
+                                                             l0_threshold: float = 0.1):
 
         # Step 1: Compute the top L1 indices based on a threshold
         top_l1_indices = (self.s12 > l1_threshold).any(dim=1).nonzero(as_tuple=True)[0].tolist()
@@ -156,8 +179,8 @@ class ConceptGrounding:
 
     def _get_nodes_l0(self, nodes_l0, l0_indices, l1_index):
         terms_with_scores = {}
-        for node_l0, original_index in zip(nodes_l0, l0_indices):
-            input_embedding = torch.tensor([node_l0], device=self.device)
+        for node_l0_embeddings, node_l0_index in zip(nodes_l0, l0_indices):
+            input_embedding = torch.tensor([node_l0_embeddings], device=self.device)
             result = self.embedding_oracle.concept_grounding_from_embeddings(
                 input_embedding,
                 num_terms_to_retrieve=1,
@@ -166,8 +189,10 @@ class ConceptGrounding:
             if 'terms' in result and result['terms']:
                 term = result['terms'][0]
                 # Get the assignment value from the s01 matrix
-                assignment_value = self.s01[original_index, l1_index].item()
+                assignment_value = self.s01[node_l0_index, l1_index].item()
                 terms_with_scores[term] = assignment_value
+
+                self.l0_names[node_l0_index] = term
 
         # Sort the dictionary by value in descending order
         sorted_terms = sorted(terms_with_scores.items(), key=lambda item: item[1], reverse=True)
@@ -175,11 +200,16 @@ class ConceptGrounding:
 
     def concept_grounding(self):
 
-        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(l1_threshold=0.5,
+        nodes_l1_to_nodes_l0 = self.retrieve_relevant_hypernodes_and_corresponding_nodes(l1_threshold=0.1,
                                                                                          l0_threshold=0.1)
         nodes_l1_to_words_l0 = {'explanation': {}}
 
+        c = 0
         for node_index, node_data in tqdm(nodes_l1_to_nodes_l0.items(), desc="Grounding L1"):
+            # c += 1
+            # if c > 3:
+            #     break
+
             hyper_node = node_data["hypernode"][:100]
             hyper_node = torch.tensor(hyper_node, device=self.device)
 
@@ -195,21 +225,22 @@ class ConceptGrounding:
             # New: Log L1 to L2 assignment values, sorted
             l1_to_l2_assignments = self.s12[node_index, :].tolist()
             sorted_l1_to_l2 = sorted(l1_to_l2_assignments, reverse=True)
-            #logging.info(f"L1 Node {node_index} to L2 assignments (sorted): {sorted_l1_to_l2}")
+            # logging.info(f"L1 Node {node_index} to L2 assignments (sorted): {sorted_l1_to_l2}")
 
             terms_l0 = list(terms_l0_with_scores.keys())
 
             terms_cg_methods = {}
 
-            methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
+            methods = ["top_l0"]
+            # methods = ["top_l0", "llm_search", "semantic_search_l0", "semantic_search_l1"]
             for cg_method in methods:
                 logging.info("Starting with method " + cg_method)
-
                 if cg_method == "top_l0":
                     term_l0 = terms_l0[:1]
                     terms_cg_methods["top_l0"] = term_l0
+                    self.l1_names[node_index] = term_l0[0] if isinstance(terms_l0, list) and len(
+                        terms_l0) > 0 else terms_l0
                     logging.info(f"Terms (top_l0): {term_l0}")
-
                 elif cg_method == "semantic_search_l0":
                     term_l1 = self.embedding_oracle.concept_grounding_from_words(
                         terms_l0,
@@ -248,14 +279,12 @@ class ConceptGrounding:
                         logging.info(f"Terms (Method LLM): {term_l1}")
                     terms_cg_methods[cg_method] = term_l1['terms'] if 'terms' in term_l1 else term_l1
 
-
             nodes_l1_to_words_l0['explanation'][node_index] = {
                 "words_l0": terms_l0_with_scores,
                 "l1_to_l2_assignments": sorted_l1_to_l2,
                 "words_cg_methods": terms_cg_methods
             }
-
-        nodes_l1_to_words_l0["y_pred"] = self.y_pred
+        nodes_l1_to_words_l0["y_pred"] = list(self.y_pred.cpu().numpy())
         nodes_l1_to_words_l0["y_test"] = self.y_test
         nodes_l1_to_words_l0["original_content"] = self.raw_file_content
 
@@ -266,5 +295,3 @@ class ConceptGrounding:
 
         with open(output_file, "w") as f:
             f.write(json.dumps(self.explanation, indent=4))
-        # with open(output_file, 'w') as outfile:
-        #     json.dump(self.explanation, outfile, indent=4)

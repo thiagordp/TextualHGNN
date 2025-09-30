@@ -129,7 +129,6 @@ class DiffPool(GNN):
         gnn3_embed (GraphSAGE): GraphSAGE embedding layer 3.
         lin1 (torch.nn.Linear): Linear layer 1.
         lin2 (torch.nn.Linear): Linear layer 2.
-
     """
 
     def __init__(self, max_num_nodes, in_channels, inner_channels, hidden_channels, out_channels,
