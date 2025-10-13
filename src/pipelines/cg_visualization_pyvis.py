@@ -47,37 +47,34 @@ class HierarchicalGraphVisualizer:
     the visual encoding scheme from the research proposal, with new features.
     """
     # Configuration constants aligned with the research proposal
-    LEVEL_Y_COORDS = {0: 800, 1: 400, 2: 0}
-    # NEW: Added 'triangle' for unassigned nodes
-    NODE_SHAPES = {0: 'dot', 1: 'square', 2: 'star', 'unassigned': 'triangle'}
-    NODE_SIZES = {0: 15, 1: 30, 2: 45}
-
+    LEVEL_Y_RANGES = {
+        0: (1300, 2000),
+        1: (300, 1100),
+        2: (-400, 200)
+    }
+    NODE_SHAPES = {0: 'dot', 1: 'square', 2: 'star', 'unassigned_downLevel': 'triangleDown',
+                   "unassigned_upLevel": "triangle"}
+    NODE_SIZES = {0: 15, 1: 15, 2: 15}
     PALETTE = ['#FF6347', '#4682B4', '#32CD32', '#FFD700', '#6A5ACD',
                '#DA70D6', '#40E0D0', '#FF8C00', '#9932CC', '#00FA9A']
 
-    def __init__(self,
-                 data: HierarchicalVisualizationData,
+    def __init__(self, data: HierarchicalVisualizationData,
                  l0_assignment_threshold: float = 0.1,
                  l1_assignment_threshold: float = 0.1):
-
         self.data = data
-        # Threshold for styling L0 nodes
         self.l0_assignment_threshold = l0_assignment_threshold
-        # Threshold for L1->L2 assignments
         self.l1_assignment_threshold = l1_assignment_threshold
         self.included_l1_nodes: Set[int] = set()
-
         self.net = Network(
             height="900px", width="100%", notebook=False, bgcolor="#222222",
-            font_color="white", select_menu=False, filter_menu=False, directed=False
+            font_color="white", directed=False, select_menu=False,filter_menu=False,neighborhood_highlight=False,
         )
-
         self.net.set_options(
             """
             var options = {
               "physics": {
-                "barnesHut": { "gravitationalConstant": -40000, "springLength": 350, "centralGravity": 0.4 },
-                "stabilization": { "iterations": 1200 }
+                "barnesHut": { "gravitationalConstant": -20000, "springLength": 150, "centralGravity": 0.5 },
+                "stabilization": { "iterations": 3500 }
               }
             }
             """.strip()
@@ -113,6 +110,7 @@ class HierarchicalGraphVisualizer:
     def _add_level_0_nodes_and_edges(self):
         """Renders the word-level graph (L0), styling nodes based on assignment strength."""
         num_nodes = self.data.adj_l0.shape[0]
+        min_y, max_y = self.LEVEL_Y_RANGES[0]
 
         for i in range(num_nodes):
             # REQUIREMENT 3: Check assignment strength
@@ -120,7 +118,7 @@ class HierarchicalGraphVisualizer:
 
             if max_assignment_score < self.l0_assignment_threshold:
                 # This node is weakly assigned or unassigned
-                shape = self.NODE_SHAPES['unassigned']
+                shape = self.NODE_SHAPES['unassigned_upLevel']
                 color = '#808080'  # Grey color for unassigned
             else:
                 # This node is assigned
@@ -128,77 +126,101 @@ class HierarchicalGraphVisualizer:
                 cluster_id = self.data.s01[i].argmax().item()
                 color = self.PALETTE[cluster_id % len(self.PALETTE)]
 
+            max_assignment_score = self.data.s01[i].max().item()
             self.net.add_node(
-                f"L0_{i}",
-                label=self.data.l0_names.get(i, str(i)),
-                shape=shape,
-                size=self.NODE_SIZES[0],
-                color=color,
+                f"L0_{i}", label=self.data.l0_names.get(i, str(i)),
+                shape=shape, size=self.NODE_SIZES[0] * max_assignment_score, color=color,
                 title=self._generate_tooltip_html(0, i),
-                x=random.uniform(-500, 500),
-                y=self.LEVEL_Y_COORDS[0] + random.uniform(-50, 50),  # Add jitter
-                physics=True
+                x=random.uniform(-1500, 1500),
+                # --- MODIFIED LINE: Assign random Y within the level's range ---
+                y=random.uniform(min_y, max_y),
+                fixed={'y': True}
             )
 
         # Add L0 edges (syntactic dependencies) - No changes here
         rows, cols = self.data.adj_l0.nonzero(as_tuple=True)
         for u, v in zip(rows, cols):
             if u.item() < v.item():
-                self.net.add_edge(f"L0_{u}", f"L0_{v}", width=1, color='rgba(200, 200, 200, 0.3)')
+                self.net.add_edge(f"L0_{u}", f"L0_{v}", width=3, color='rgba(200, 200, 200, 0.15)')
 
     def _add_higher_level_nodes_and_edges(self, level: int):
         if level == 1:
             adj = self.data.adj_l1
             s_matrix_next = self.data.s12
             num_nodes = adj.shape[0]
+            min_y, max_y = self.LEVEL_Y_RANGES[1]
+
             for i in range(num_nodes):
                 l0_connection_strength = self.data.s01[:, i].max().item()
                 l2_connection_strength = s_matrix_next[i].max().item()
                 if (l0_connection_strength >= self.l0_assignment_threshold or
                         l2_connection_strength >= self.l1_assignment_threshold):
+
                     self.included_l1_nodes.add(i)
                     assignments_to_next = s_matrix_next.argmax(dim=1)
                     super_cluster_id = assignments_to_next[i].item()
                     border_color = self.PALETTE[super_cluster_id % len(self.PALETTE)]
+
+                    if l0_connection_strength < self.l0_assignment_threshold:
+                        shape = "diamond"
+                        shape = self.NODE_SHAPES['unassigned_downLevel']
+                    elif l2_connection_strength < self.l1_assignment_threshold:
+                        shape = "triangle"
+                        shape = self.NODE_SHAPES['unassigned_upLevel']
+                    else:
+                        shape = self.NODE_SHAPES[1]
+                    max_assignment_score = self.data.s12[i].max().item()
+
                     self.net.add_node(
-                        f"L1_{i}",
-                        label=self.data.l1_names.get(i, f"C1_{i}"),
-                        shape=self.NODE_SHAPES[1], size=self.NODE_SIZES[1],
-                        color={"background": "#555555", "border": border_color},
-                        borderWidth=4, title=self._generate_tooltip_html(1, i),
-                        x=random.uniform(-400, 400), y=self.LEVEL_Y_COORDS[1],
-                        physics=True
+                        f"L1_{i}", label=self.data.l1_names.get(i, f"C1_{i}"),
+                        shape=shape, size=self.NODE_SIZES[1] * max_assignment_score,
+                        color={"border": "#555555", "background": border_color},
+                        borderWidth=1, title=self._generate_tooltip_html(1, i),
+                        x=random.uniform(-1500, 1500),
+                        y=random.uniform(min_y, max_y),
+                        fixed={'y': True}
                     )
-            rows, cols = adj.nonzero(as_tuple=True)
-            for u_item, v_item in zip(rows.tolist(), cols.tolist()):
-                if u_item < v_item and u_item in self.included_l1_nodes and v_item in self.included_l1_nodes:
-                    weight = adj[u_item, v_item].item()
-                    self.net.add_edge(
-                        f"L1_{u_item}", f"L1_{v_item}", value=weight,
-                        width=0.5 + weight * 4, color="rgba(255, 107, 71, 0.7)",
-                        title=f'Adj: {weight:.3f}'
-                    )
+
+            # rows, cols = adj.nonzero(as_tuple=True)
+            # for u_item, v_item in zip(rows.tolist(), cols.tolist()):
+            #     if u_item < v_item and u_item in self.included_l1_nodes and v_item in self.included_l1_nodes:
+            #         weight = adj[u_item, v_item].item()
+            #         self.net.add_edge(
+            #             f"L1_{u_item}", f"L1_{v_item}",
+            #             width=0.5, color=f"rgba(255, 107, 71, 0.6)",
+            #             title=f'Adj: {weight:.3f}'
+            #         )
         elif level == 2:
             adj = self.data.adj_l2
             num_nodes = adj.shape[0]
+            min_y, max_y = self.LEVEL_Y_RANGES[2]
+
             for i in range(num_nodes):
+                l1_connection_strength = self.data.s12[:, i].max().item()
+
+                shape = self.NODE_SHAPES['unassigned_downLevel'] \
+                    if l1_connection_strength < self.l1_assignment_threshold \
+                    else self.NODE_SHAPES[2]
+
                 self.net.add_node(
-                    f"L2_{i}",
-                    label=self.data.l2_names.get(i, f"C2_{i}"),
-                    shape=self.NODE_SHAPES[2], size=self.NODE_SIZES[2],
+                    f"L2_{i}", label=self.data.l2_names.get(i, f"C2_{i}"),
+                    shape=shape, size=self.NODE_SIZES[2],
                     color={"background": "#CCCCCC", "border": "#FFFFFF"}, borderWidth=1,
-                    title=self._generate_tooltip_html(2, i), x=random.uniform(-400, 400),
-                    y=self.LEVEL_Y_COORDS[2], physics=True
+                    title=self._generate_tooltip_html(2, i),
+                    x=random.uniform(-1500, 1500),
+                    y=random.uniform(min_y, max_y),
+                    fixed={'y': True}
                 )
-            rows, cols = adj.nonzero(as_tuple=True)
-            for u_item, v_item in zip(rows.tolist(), cols.tolist()):
-                if u_item < v_item:
-                    weight = adj[u_item, v_item].item()
-                    self.net.add_edge(
-                        f"L2_{u_item}", f"L2_{v_item}", value=weight,
-                        width=0.5 + weight * 4, color="rgba(70, 130, 180, 0.9)",
-                        title=f'Adj: {weight:.3f}'
-                    )
+
+            # rows, cols = adj.nonzero(as_tuple=True)
+            # for u_item, v_item in zip(rows.tolist(), cols.tolist()):
+            #     if u_item < v_item:
+            #         weight = adj[u_item, v_item].item()
+            #         self.net.add_edge(
+            #             f"L2_{u_item}", f"L2_{v_item}",
+            #             width=0.5, color=f"rgba(90, 190, 80, {weight * 100})",
+            #             title=f'Adj: {weight:.3f}'
+            #         )
 
     def _add_inter_level_edges(self):
         """Adds edges representing assignments between hierarchical levels."""
@@ -207,9 +229,10 @@ class HierarchicalGraphVisualizer:
             max_assignment_score = self.data.s01[l0_idx].max().item()
             if max_assignment_score >= self.l0_assignment_threshold:
                 l1_idx = self.data.s01[l0_idx].argmax().item()
+                assignment = self.data.s01[l0_idx, l1_idx].item()
                 self.net.add_edge(
                     f"L0_{l0_idx}", f"L1_{l1_idx}",
-                    dashes=True, color='rgba(200, 200, 200, 0.2)', width=0.5,
+                    dashes=True, color=f'rgba(200, 200, 200, f{max(1.0, 0.2 + assignment):.2f})', width=2 * assignment,
                     title=f'Assign (L0-L1): {max_assignment_score:.2f}'
                 )
 
@@ -221,7 +244,7 @@ class HierarchicalGraphVisualizer:
                 l2_idx = self.data.s12[l1_idx].argmax().item()
                 self.net.add_edge(
                     f"L1_{l1_idx}", f"L2_{l2_idx}", dashes=[5, 5],
-                    color='rgba(70, 130, 180, 0.5)', width=1.5,
+                    color='rgba(70, 130, 180, 0.5)', width=3 * self.data.s12[l1_idx, l2_idx].item()**2,
                     title=f'Assign (L1-L2): {max_assignment_score:.2f}'
                 )
 
@@ -281,7 +304,7 @@ def main():
     )
 
     # --- Run Concept Grounding to get the data ---
-    doc_index = 1
+    doc_index = 2
     data_element = tgd_test[doc_index * -1].to(device=DEVICE)
     cg = ConceptGrounding(
         graph_model=diffpool_model, embedding_oracle=oracle, llm_oracle=llm_oracle,
@@ -318,7 +341,6 @@ def main():
     visualizer = HierarchicalGraphVisualizer(data=viz_data,
                                              l0_assignment_threshold=0.01,
                                              l1_assignment_threshold=0.01)
-
 
     path_to_visualization = Path(f"data/visualization/{DATASET}/{SPLIT_USED}/")
     os.makedirs(path_to_visualization, exist_ok=True)

@@ -183,7 +183,8 @@ class ConceptGrounding:
         logging.info("Starting L0 concept grounding for all nodes...")
         cutoff_idx = (self.x_l0.abs().sum(dim=1) > 1e-5).nonzero().max().item() + 1
 
-        for i in tqdm(list(range(cutoff_idx)), desc="Grounding L0 Nodes"):
+        l0_node_indices = list(range(cutoff_idx))#[:2]
+        for i in tqdm(l0_node_indices, desc="Grounding L0 Nodes"):
             node_embedding = self.x_l0[i].unsqueeze(0)
             result = self.embedding_oracle.concept_grounding_from_embeddings(
                 node_embedding,
