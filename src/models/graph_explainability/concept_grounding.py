@@ -185,6 +185,9 @@ class ConceptGrounding:
 
         l0_node_indices = list(range(cutoff_idx))#[:2]
         for i in tqdm(l0_node_indices, desc="Grounding L0 Nodes"):
+            # if i > 7:
+            #     break
+
             node_embedding = self.x_l0[i].unsqueeze(0)
             result = self.embedding_oracle.concept_grounding_from_embeddings(
                 node_embedding,

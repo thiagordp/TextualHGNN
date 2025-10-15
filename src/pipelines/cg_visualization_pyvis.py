@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Dict
 
 import torch
+from networkx.drawing import spring_layout
 from pyvis.network import Network
 import torch_geometric.transforms as T
 
@@ -54,7 +55,7 @@ class HierarchicalGraphVisualizer:
     }
     NODE_SHAPES = {0: 'dot', 1: 'square', 2: 'star', 'unassigned_downLevel': 'triangleDown',
                    "unassigned_upLevel": "triangle"}
-    NODE_SIZES = {0: 15, 1: 15, 2: 15}
+    NODE_SIZES = {0: 20, 1: 20, 2: 15}
     PALETTE = ['#FF6347', '#4682B4', '#32CD32', '#FFD700', '#6A5ACD',
                '#DA70D6', '#40E0D0', '#FF8C00', '#9932CC', '#00FA9A']
 
@@ -67,18 +68,35 @@ class HierarchicalGraphVisualizer:
         self.included_l1_nodes: Set[int] = set()
         self.net = Network(
             height="900px", width="100%", notebook=False, bgcolor="#222222",
-            font_color="white", directed=False, select_menu=False,filter_menu=False,neighborhood_highlight=False,
+            font_color="white", directed=False, select_menu=False, filter_menu=False, neighborhood_highlight=False,
+            cdn_resources='in_line'
         )
-        self.net.set_options(
-            """
-            var options = {
-              "physics": {
-                "barnesHut": { "gravitationalConstant": -20000, "springLength": 150, "centralGravity": 0.5 },
-                "stabilization": { "iterations": 3500 }
-              }
-            }
-            """.strip()
+        # self.net.set_options(
+        #     """
+        #     var options = {
+        #       "physics": {
+        #         "barnesHut": { "gravitationalConstant": -20000, "springLength": 150, "centralGravity": 0.5 },
+        #         "stabilization": { "iterations": 5000 }
+        #       }
+        #     }
+        #     """.strip()
+        # )
+
+        # Example of balanced physics
+        self.net.barnes_hut(
+            gravity=-20000,  # controls overall "pull" to center
+            central_gravity=0.3,  # how tightly nodes cluster around the center
+            spring_length=25,  # ideal distance between connected nodes
+            spring_strength=0.15,  # higher = connected nodes stick closer
         )
+
+        # Extra repulsion (for overall spread)
+        self.net.repulsion(
+            node_distance=300,  # space between unconnected nodes
+            central_gravity=0.2,  # helps keep the network cohesive
+            spring_length=100
+        )
+
 
     def _generate_tooltip_html(self, level: int, node_id: int) -> str:
         """Generates HTML for tooltips based on user's preferred format."""
@@ -91,20 +109,22 @@ class HierarchicalGraphVisualizer:
             top_scores, top_indices = torch.topk(s01_col, k=min(3, len(s01_col)))
             constituents = "\n".join([
                 f"{self.data.l0_names.get(idx.item(), 'N/A')} ({score:.2f})"
-                for idx, score in zip(top_indices, top_scores) if score > 1e-3
+                for idx, score in zip(top_indices, top_scores) if score > self.l0_assignment_threshold
             ])
             rep_word_idx = torch.argmax(s01_col).item()
             rep_word = self.data.l0_names.get(rep_word_idx, "N/A")
             return f"Cluster (L1)\nID: C1_{node_id}\nName: {rep_word}\nConstituents:\n{constituents}"
         elif level == 2:
             s12_col = self.data.s12[:, node_id]
-            name = self.data.l2_names.get(node_id, f"Node {node_id}")
-            top_scores, top_indices = torch.topk(s12_col, k=min(3, len(s12_col)))
+
+            top_scores, top_indices = torch.topk(s12_col, k=min(10, len(s12_col)))
             constituents = "\n".join([
-                f"C1_{idx.item()} ({score:.2f})"
-                for idx, score in zip(top_indices, top_scores) if score > 0
+                f"{self.data.l1_names.get(idx.item(), 'N/A')} ({score:.2f})"
+                for idx, score in zip(top_indices, top_scores) if score > self.l1_assignment_threshold
             ])
-            return f"Cluster (L2)\nID: C2_{node_id}\nName: {name}\nConstituents:\n{constituents}"
+            rep_word_idx = torch.argmax(s12_col).item()
+            rep_word = self.data.l1_names.get(rep_word_idx, "N/A")
+            return f"Cluster (L2)\nID: C2_{node_id}\nName: {rep_word}\nConstituents:\n{constituents}"
         return ""
 
     def _add_level_0_nodes_and_edges(self):
@@ -128,10 +148,11 @@ class HierarchicalGraphVisualizer:
 
             max_assignment_score = self.data.s01[i].max().item()
             self.net.add_node(
-                f"L0_{i}", label=self.data.l0_names.get(i, str(i)),
+                f"L0_{i}",
+                label=self.data.l0_names.get(i, str(i)),
                 shape=shape, size=self.NODE_SIZES[0] * max_assignment_score, color=color,
                 title=self._generate_tooltip_html(0, i),
-                x=random.uniform(-1500, 1500),
+                x=0,  # random.uniform(-1500, 1500),
                 # --- MODIFIED LINE: Assign random Y within the level's range ---
                 y=random.uniform(min_y, max_y),
                 fixed={'y': True}
@@ -172,24 +193,27 @@ class HierarchicalGraphVisualizer:
                     max_assignment_score = self.data.s12[i].max().item()
 
                     self.net.add_node(
-                        f"L1_{i}", label=self.data.l1_names.get(i, f"C1_{i}"),
-                        shape=shape, size=self.NODE_SIZES[1] * max_assignment_score,
+                        f"L1_{i}",
+                        label=self.data.l1_names.get(i, f"C1_{i}"),
+                        shape=shape,
+                        size=self.NODE_SIZES[1] * max_assignment_score,
                         color={"border": "#555555", "background": border_color},
                         borderWidth=1, title=self._generate_tooltip_html(1, i),
-                        x=random.uniform(-1500, 1500),
+                        x=0,  # random.uniform(-1500, 1500),
                         y=random.uniform(min_y, max_y),
-                        fixed={'y': True}
+                        fixed={'y': True},
                     )
 
-            # rows, cols = adj.nonzero(as_tuple=True)
-            # for u_item, v_item in zip(rows.tolist(), cols.tolist()):
-            #     if u_item < v_item and u_item in self.included_l1_nodes and v_item in self.included_l1_nodes:
-            #         weight = adj[u_item, v_item].item()
-            #         self.net.add_edge(
-            #             f"L1_{u_item}", f"L1_{v_item}",
-            #             width=0.5, color=f"rgba(255, 107, 71, 0.6)",
-            #             title=f'Adj: {weight:.3f}'
-            #         )
+            rows, cols = adj.nonzero(as_tuple=True)
+            for u_item, v_item in zip(rows.tolist(), cols.tolist()):
+                if u_item < v_item and u_item in self.included_l1_nodes and v_item in self.included_l1_nodes:
+                    weight = adj[u_item, v_item].item()
+                    self.net.add_edge(
+                        f"L1_{u_item}", f"L1_{v_item}",
+                        value=0.25, color=f"rgba(255, 107, 71, 0.10)",
+                        title=f'Adj: {weight:.3f}',
+                        hidden=True,
+                    )
         elif level == 2:
             adj = self.data.adj_l2
             num_nodes = adj.shape[0]
@@ -207,20 +231,21 @@ class HierarchicalGraphVisualizer:
                     shape=shape, size=self.NODE_SIZES[2],
                     color={"background": "#CCCCCC", "border": "#FFFFFF"}, borderWidth=1,
                     title=self._generate_tooltip_html(2, i),
-                    x=random.uniform(-1500, 1500),
+                    x=0,  # random.uniform(-1500, 1500),
                     y=random.uniform(min_y, max_y),
                     fixed={'y': True}
                 )
 
-            # rows, cols = adj.nonzero(as_tuple=True)
-            # for u_item, v_item in zip(rows.tolist(), cols.tolist()):
-            #     if u_item < v_item:
-            #         weight = adj[u_item, v_item].item()
-            #         self.net.add_edge(
-            #             f"L2_{u_item}", f"L2_{v_item}",
-            #             width=0.5, color=f"rgba(90, 190, 80, {weight * 100})",
-            #             title=f'Adj: {weight:.3f}'
-            #         )
+            rows, cols = adj.nonzero(as_tuple=True)
+            for u_item, v_item in zip(rows.tolist(), cols.tolist()):
+                if u_item < v_item:
+                    weight = adj[u_item, v_item].item()
+                    self.net.add_edge(
+                        f"L2_{u_item}", f"L2_{v_item}",
+                        value=0.25, color=f"rgba(90, 190, 80, 0.10)",
+                        title=f'Adj: {weight:.3f}',
+                        hidden=True,
+                    )
 
     def _add_inter_level_edges(self):
         """Adds edges representing assignments between hierarchical levels."""
@@ -244,7 +269,7 @@ class HierarchicalGraphVisualizer:
                 l2_idx = self.data.s12[l1_idx].argmax().item()
                 self.net.add_edge(
                     f"L1_{l1_idx}", f"L2_{l2_idx}", dashes=[5, 5],
-                    color='rgba(70, 130, 180, 0.5)', width=3 * self.data.s12[l1_idx, l2_idx].item()**2,
+                    color='rgba(70, 130, 180, 0.5)', width=3 * self.data.s12[l1_idx, l2_idx].item() ** 2,
                     title=f'Assign (L1-L2): {max_assignment_score:.2f}'
                 )
 
@@ -332,7 +357,7 @@ def main():
         s12=cg.s12,
         l0_names={i: name for i, name in enumerate(cg.l0_names[:cutoff_idx])},
         l1_names={i: name for i, name in enumerate(cg.l1_names)},
-        l2_names={i: f"C2_{i}" for i in range(cg.adj_l2.shape[0])}
+        l2_names={i: name for i, name in enumerate(cg.l2_names)},
     )
 
     # --- Generate Visualization ---
