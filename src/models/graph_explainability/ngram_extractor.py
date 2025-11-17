@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 from collections import deque
@@ -162,7 +163,7 @@ class NGramExtractor:
             self.embedding_oracle.add_terms_bulk(ngrams, batch_size=batch_size)
             # (f"Successfully stored n-grams for document ID: {doc_id}.")
         except Exception as e:
-            print(f"Error storing n-grams for document ID: {doc_id}: {e}")
+            logging.info(f"Error storing n-grams for document ID: {doc_id}: {e}")
 
 
 if __name__ == "__main__":
@@ -189,7 +190,7 @@ if __name__ == "__main__":
 
     random.shuffle(pt_files)
 
-    print(f"Found {len(pt_files)} .pt files in {data_folder}. Starting processing...")
+    logging.info(f"Found {len(pt_files)} .pt files in {data_folder}. Starting processing...")
 
     # Iterate over each .pt file
     for pt_file in tqdm(pt_files[:10000], desc="Processing .pt files"):
@@ -199,11 +200,11 @@ if __name__ == "__main__":
 
             # Check if the loaded graph is a valid NetworkX MultiDiGraph
             if not isinstance(graph_nx, nx.MultiDiGraph):
-                print(f"Skipping file {pt_file}: Not a valid MultiDiGraph.")
+                logging.info(f"Skipping file {pt_file}: Not a valid MultiDiGraph.")
                 continue
 
             # Extract and store n-grams using the NGramExtractor
             ngram_extractor.process_graph_and_store_ngrams(graph_nx, n=NGRAM, batch_size=BATCH_SIZE)
 
         except Exception as e:
-            print(f"Error processing {pt_file}: {e}")
+            logging.info(f"Error processing {pt_file}: {e}")

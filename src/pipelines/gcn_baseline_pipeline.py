@@ -417,7 +417,7 @@ def main():
     """
     Main function to orchestrate the training, validation, and testing of the GNN model.
     """
-    print("Current directory:", os.getcwd())
+    logging.info("Current directory:", os.getcwd())
 
     # Load datasets
     tgd_train, tgd_val, tgd_test = load_datasets(
@@ -466,7 +466,7 @@ def main():
         evaluate_model(model, val_loader, loss_fn, "Validation")
         evaluate_model(model, test_loader, loss_fn, "Test")
     else:
-        print("No best model was saved.")
+        logging.info("No best model was saved.")
 
 
 if __name__ == "__main__":

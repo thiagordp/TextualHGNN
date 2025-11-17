@@ -18,14 +18,6 @@ ROOT = f"data/datasets/{DATASET}"
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 log_file = f"logs/experiment_text2graph_{DATASET}_{timestamp}.log"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Console output
-        logging.FileHandler(log_file)  # File output
-    ]
-)
 
 logging.info(f"==================== START OF NEW EXPERIMENT: {DATASET} ====================")
 

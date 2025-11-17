@@ -1,3 +1,4 @@
+import logging
 import math
 import torch
 import torch.nn as nn
@@ -325,10 +326,10 @@ class SubgraphX(nn.Module):
 
             def _print_tabs(count):
                 for i in range(count):
-                    print("\t", end="")
+                    logging.info("\t", end="")
 
             _print_tabs(count)
-            print(root)
+            logging.info(root)
 
             if len(mcts_node.children) == 0:
                 return None
@@ -351,7 +352,7 @@ class SubgraphX(nn.Module):
 
         for i in range(self.num_rollouts):
             if self.log:
-                print(
+                logging.info(
                     f"Rollout {i + 1:3d}/{self.num_rollouts:3d}, "
                     f"{len(self.mcts_node_maps):4d} subgraphs have been explored."
                 )

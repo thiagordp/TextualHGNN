@@ -1,3 +1,5 @@
+import logging
+
 import pandas as pd
 
 import matplotlib.pyplot as plt
@@ -50,6 +52,6 @@ def summarize_param_effect(df, param):
 
 for param in RELEVANT_COLUMNS:
     summary = summarize_param_effect(df, param)
-    print(f"\nParam: {param}")
-    print(summary[['mean', 'ci_lower', 'ci_upper']])
-    print(f"Best value for {param}: {summary.index[0]} (Mean Macro F1: {summary.iloc[0]['mean']:.4f})")
+    logging.info(f"\nParam: {param}")
+    logging.info(summary[['mean', 'ci_lower', 'ci_upper']])
+    logging.info(f"Best value for {param}: {summary.index[0]} (Mean Macro F1: {summary.iloc[0]['mean']:.4f})")

@@ -10,9 +10,11 @@ import pickle
 import random
 import re
 import time
+import math
+from collections import defaultdict
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Callable, Optional, Tuple, Any, Hashable, Set
+from typing import List, Callable, Optional, Tuple, Any, Hashable, Set, Dict
 
 import gensim
 import networkx as nx
@@ -25,6 +27,8 @@ from dotenv import load_dotenv
 from matplotlib import pyplot as plt
 from networkx import MultiDiGraph
 from sklearn.preprocessing import LabelEncoder
+from spacy import Language
+from spacy.tokens import Doc, Token
 from torch_geometric.data import Dataset, Data
 from torch_geometric.deprecation import deprecated
 from torch_geometric.transforms import ToDense
@@ -40,6 +44,8 @@ from nltk.tokenize import WordPunctTokenizer
 
 from collections import Counter
 
+from src.multi_graph.visualization import visualize_structural_graph
+
 load_dotenv()
 
 MAX_CORPUS_SIZE = int(os.environ.get("MAX_CORPUS_SIZE")) if os.environ.get("MAX_CORPUS_SIZE") else 5
@@ -51,6 +57,18 @@ class Text2Graph(ABC):
     """
     An interface for parsing text data into a graph representation.
     """
+
+    @property
+    @abstractmethod
+    def text_embedding(self):
+        """Should return the TextEmbedding object."""
+        pass
+
+    @property
+    @abstractmethod
+    def nlp(self):
+        """Should return the spaCy NLP object."""
+        pass
 
     @abstractmethod
     def parse_corpus(self, corpus: List[str], preprocessing_fn: Callable = None) -> List[nx.MultiDiGraph]:
@@ -150,8 +168,7 @@ class GloveEmbedding:
                           If word_embeddings is True, returns a tensor of shape (glove_dim,).
         """
         # Tokenize the text into words using the WordPunctTokenizer
-        tokenizer = WordPunctTokenizer()
-        words = tokenizer.tokenize(text.lower())  # Tokenize and convert to lowercase
+        words = text.lower().strip().split()
 
         # Initialize an empty list to store the embedding vectors
         embedding_matrix = []
@@ -182,6 +199,10 @@ class GloveEmbedding:
 
             # Append the embedding vector to the list
             embedding_matrix.append(embedding_vector)
+
+        if not embedding_matrix:
+            # Return a zero vector of the correct dimension if text is empty
+            return torch.zeros(self.glove_dim, dtype=torch.float)
 
         # If word_embeddings is True, return the mean of the word embeddings
         if word_embeddings:
@@ -246,6 +267,10 @@ class TextEmbedding:
 
 
 class Text2DP(Text2Graph):
+    """
+    Builds a "Graph of Words" where each node is a unique (lemma, POS) pair.
+    All occurrences of a word map to the *same* node.
+    """
 
     def __init__(self, lang="english", max_num_nodes=1000):
 
@@ -257,33 +282,46 @@ class Text2DP(Text2Graph):
         }
         self.embeddings_path = {
             "italian": "data/external/embeddings/itwiki_20180420_100d.bin",
-            "english": "data/external/embeddings/enwiki_20180420_100d.bin",
+            "english": "data/external/embeddings/glove_stanford_100d.bin",
+            # "english": "data/external/embeddings/enwiki_20180420_100d.bin",
             "portuguese": "data/external/embeddings/glove_legal_100.bin",
             "portuguese_voto": "data/external/embeddings/glove_legal_100.bin",
-
         }
 
         self.lang = lang
-        self.nlp = spacy.load(self.spacy_models[lang])
+        self._nlp = spacy.load(self.spacy_models[lang])
+
+        deps = self.nlp.get_pipe("parser").labels
+        self.dep_label_map = {label: idx for idx, label in enumerate(deps)}
         self.max_num_nodes = max_num_nodes
 
         self.pos_to_ignore: Set[str] = {
             "PUNCT",  # Punctuation
-            "ADP",  # Adposition (prepositions, postpositions)
-            "SPACE",  # Whitespace
-            "SYM",  # Symbol
-            "X",  # Other
+            # "ADP",  # Adposition (prepositions, postpositions)
+            # "SPACE",  # Whitespace
+            # "SYM",  # Symbol
+            # "X",  # Other
             "DET",
-            "CCONJ"
+            # "CCONJ"
         }
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Word Embeddings
-        self.text_embedding = TextEmbedding(
+        self._text_embedding = TextEmbedding(
             model_name="glove",
             file_path=self.embeddings_path[self.lang]
         )
+
+    @property
+    def nlp(self):
+        """Implement property from Text2Graph interface"""
+        return self._nlp
+
+    @property
+    def text_embedding(self):
+        """Implement property from Text2Graph interface"""
+        return self._text_embedding
 
     def _is_valid_token(self, token: spacy.tokens.Token) -> bool:
         """Centralized check to validate a token."""
@@ -350,7 +388,7 @@ class Text2DP(Text2Graph):
         # self._add_sequential_edges(graph, doc) # TODO: test with and without sequential edges.
 
         # After edges are added
-        if graph.number_of_nodes() > self.max_num_nodes * 1000:
+        if graph.number_of_nodes() >= self.max_num_nodes:
             logging.warning(
                 f"Graph grew too large ({graph.number_of_nodes()} nodes > {self.max_num_nodes}). Skipping graph.")
             return None
@@ -362,7 +400,7 @@ class Text2DP(Text2Graph):
         for token in doc:
             # ️ Ensure both token and its head are valid before adding the edge
             if self._is_valid_token(token) and self._is_valid_token(token.head) and token != token.head:
-                add_new_relation_to_graph(
+                status = add_new_relation_to_graph(
                     target_graph=graph,
                     node_1_lemma=token.head.text,
                     node_1_pos=token.head.pos_,  # Pass the head's POS tag
@@ -374,6 +412,10 @@ class Text2DP(Text2Graph):
                     max_num_nodes=self.max_num_nodes
                 )
 
+                if not status:
+                    logging.info("Stopping adding dep edges")
+                    break
+
     def _add_sequential_edges(self, graph: nx.MultiDiGraph, doc: spacy.tokens.Doc) -> None:
         """Add sequential edges to the graph to represent the natural word order."""
         # Use the centralized filter for cleaner code
@@ -381,7 +423,7 @@ class Text2DP(Text2Graph):
 
         # TODO: Test both with lemma and without lemma.
         for current_token, next_token in zip(filtered_tokens[:-1], filtered_tokens[1:]):
-            add_new_relation_to_graph(
+            status = add_new_relation_to_graph(
                 graph,
                 current_token.lemma_,  # Use lemma for normalization
                 next_token.lemma_,
@@ -391,10 +433,204 @@ class Text2DP(Text2Graph):
                 max_num_nodes=self.max_num_nodes
             )
 
+            if not status:
+                break
+
+
+class PhraseSubgraphBuilder(Text2Graph):
+    """
+    Builds a "Graph of Occurrences" where each node is a unique TOKEN (word occurrence).
+    Edges are created for:
+    1. Syntactic dependencies (within a sentence), weighted by PMI.
+    2. Sequential links between sentence roots (weight=1.0).
+    """
+
+    def __init__(self, nlp: Language, text_embedding: TextEmbedding,
+                 max_num_nodes=1000, min_pmi_threshold=0.0):
+        """
+        Initializes the builder.
+
+        Args:
+            nlp (Language): A loaded spaCy model.
+            text_embedding (TextEmbedding): The loaded TextEmbedding object from your repo.
+            max_num_nodes (int): Max nodes for the graph.
+            min_pmi_threshold (float): Minimum PMI to create an edge.
+        """
+        self._nlp = nlp
+        self._text_embedding = text_embedding
+        self.max_num_nodes = max_num_nodes
+        self.min_pmi = min_pmi_threshold  # [NEW]
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.pmi: Dict[Tuple[str, str], float] = {}  # [NEW]
+        self.dep_to_ignore: Set[str] = {"punct"}  # [NEW]
+
+        deps = self._nlp.get_pipe("parser").labels
+        self.dep_label_map = {label: idx for idx, label in enumerate(deps)}
+
+        # [STANDARD] Replicate the token filters from Text2DP
+        self.pos_to_ignore: Set[str] = {
+            "SPACE",  # Whitespace
+            "SYM",  # Symbol
+            "X",  # Other
+        }
+
+    @property
+    def nlp(self):
+        """Implement property from Text2Graph interface"""
+        return self._nlp
+
+    @property
+    def text_embedding(self):
+        """Implement property from Text2Graph interface"""
+        return self._text_embedding
+
+    def _is_valid_token(self, token: Token) -> bool:
+        """[STANDARD] Centralized check to validate a token."""
+        return token.pos_ not in self.pos_to_ignore and token.text.strip()
+
+    # --- [NEW] PMI Helper Methods from Snippet ---
+    def _preprocess_node_text(self, text: str) -> str:
+        return text.lower().strip()
+
+    def _is_valid_dependency(self, h, c, d) -> bool:
+        if not h or not c or h == c: return False
+        if d in self.dep_to_ignore: return False
+        return True
+
+    def compute_pmi(self, corpus_docs: List[Doc]):
+        """Calculates PMI from a list of pre-processed spaCy Docs."""
+        logging.info("Calculating PMI for PhraseSubgraphBuilder...")
+        co_occur, word_count = defaultdict(int), defaultdict(int)
+        total_edges = 0
+        for doc in tqdm(corpus_docs, desc="1/2: Counting co-occurrences"):
+            for token in doc:
+                # Use preprocessed text for PMI keys
+                h = self._preprocess_node_text(token.head.text)
+                c = self._preprocess_node_text(token.text)
+                if not self._is_valid_dependency(h, c, token.dep_): continue
+
+                co_occur[(h, c)] += 1
+                word_count[h] += 1
+                word_count[c] += 1
+                total_edges += 1
+
+        if total_edges == 0:
+            logging.warning("No valid dependency edges found to compute PMI.")
+            return
+
+        pmi_values = {}
+        for (w1, w2), count in tqdm(co_occur.items(), desc="2/2: Calculating PMI"):
+            p_w1 = word_count[w1] / total_edges
+            p_w2 = word_count[w2] / total_edges
+            p_w1_w2 = count / total_edges
+            pmi_val = math.log2(p_w1_w2 / (p_w1 * p_w2 + 1e-9))
+            pmi_values[(w1, w2)] = pmi_val
+
+        self.pmi = pmi_values
+        logging.info(f"PMI calculation complete. Found {len(self.pmi)} valid pairs.")
+
+    # --- End of [NEW] PMI Methods ---
+
+    def parse_corpus(self, corpus: List[str], preprocessing_fn: Optional[Callable] = None) -> List[nx.MultiDiGraph]:
+        """Implement abstract method"""
+        graphs = []
+        for text in tqdm(corpus, desc="Parsing corpus (PhraseSubgraphBuilder)"):
+            graph = self.parse_document(text, preprocessing_fn=preprocessing_fn)
+            if graph is not None:
+                graphs.append(graph)
+        return graphs
+
+    def parse_document(self, text: str, preprocessing_fn: Optional[Callable] = None) -> nx.MultiDiGraph | None:
+        """
+        [UPGRADED LOGIC]
+        Parse an individual document into a "graph of occurrences" representation,
+        now with PMI-weighted dependency edges.
+        """
+        if not text or not text.strip():
+            logging.warning("Input text is empty or contains only whitespace. Skipping.")
+            return None
+
+        if preprocessing_fn:
+            text = preprocessing_fn(text, self.nlp)
+
+        G = nx.MultiDiGraph()
+        doc = self.nlp(text)
+
+        # --- Pass 1: Create Nodes (one per token) ---
+        for token in doc:
+            if not self._is_valid_token(token):
+                continue
+
+            if G.number_of_nodes() >= self.max_num_nodes:
+                logging.warning(f"Graph capacity reached ({self.max_num_nodes}). Stopping node addition.")
+                break
+
+            node_id = token.i
+            node_text = self._preprocess_node_text(token.text)
+            embedding = self.text_embedding.retrieve_embeddings(node_text)
+
+            # ONLY add the 'x' attribute.
+            # The 'lemma' and 'pos' attributes are strings and
+            # are confusing the from_networkx converter.
+            G.add_node(
+                node_id,
+                x=embedding
+                # lemma=token.lemma_.lower().strip(), # <-- REMOVED
+                # pos=token.pos_                     # <-- REMOVED
+            )
+
+        if G.number_of_nodes() == 0:
+            return None
+
+            # --- Pass 2: Create PMI-Weighted Dependency Edges (Directional) ---
+        for token in doc:
+            head_id = token.head.i
+            token_id = token.i
+
+            if head_id == token_id or not G.has_node(head_id) or not G.has_node(token_id):
+                continue
+
+            h = self._preprocess_node_text(token.head.text)
+            c = self._preprocess_node_text(token.text)
+
+            if not self._is_valid_dependency(h, c, token.dep_):
+                continue
+
+            pmi_val = self.pmi.get((h, c))
+
+            if pmi_val is None or pmi_val < self.min_pmi:
+                continue
+
+            G.add_edge(head_id, token_id, label=token.dep_, weight=pmi_val + 1)
+
+        # --- Pass 3: Create Stitching Edges (Directional, weight=1.0) ---
+        prev_root_id = None
+        for sent in doc.sents:
+            current_root_id = sent.root.i
+
+            if not G.has_node(current_root_id):
+                continue
+
+            if prev_root_id is not None:
+                G.add_edge(prev_root_id, current_root_id, label="next_root", weight=1.0)
+
+            prev_root_id = current_root_id
+
+        # Remove all isolated nodes.
+        # Find isolates (nodes with degree 0: no incoming and no outgoing edges in directed graphs)
+        isolated_nodes = list(nx.isolates(G))
+        # nx.isolates returns an iterator, so cast to list first :contentReference[oaicite:1]{index=1}
+
+        # Remove them
+        # avoid passing the generator directly to remove_nodes_from to prevent “dictionary changed size” errors. :contentReference[oaicite:2]{index=2}
+        G.remove_nodes_from(isolated_nodes)
+        return G
+
 
 class Text2GraphDataset:
     """
     Class for managing datasets and parsing text data into dp_graphs.
+    Now includes a helper to get processed docs for PMI calculation.
 
     Attributes:
         text_to_graph_parser (Text2Graph): An instance of Text2Graph or its subclass used for parsing text into dp_graphs.
@@ -406,7 +642,8 @@ class Text2GraphDataset:
         build_pyg_dataset(): Builds a PyTorch Geometric (PyG) dataset from the parsed dp_graphs.
     """
 
-    def __init__(self, text_to_graph_parser: Text2Graph, path_to_corpus: Path, path_to_output: Path):
+    def __init__(self, text_to_graph_parser: Text2Graph, path_to_corpus: Path, path_to_output: Path,
+                 preprocessing_fn: Callable = None):
         """
         Initialize the Text2GraphDataset.
 
@@ -440,6 +677,26 @@ class Text2GraphDataset:
         self.class_names = None
         self.corpus = None
         self.parsed_graphs = None
+        self.preprocessing_fn = preprocessing_fn
+        self.nlp = self.text_to_graph_parser.nlp
+
+    def get_processed_docs(self) -> List[Doc]:
+        """
+        Pre-processes the entire corpus and returns a list of spaCy Docs.
+        Used for corpus-wide calculations like PMI.
+        """
+        if not self.corpus:
+            logging.warning("Corpus not loaded. Call load_corpus() first.")
+            return []
+
+        processed_docs = []
+        desc = "Pre-processing texts for PMI"
+        for file_name, label, text in tqdm(self.corpus, desc=desc):
+            clean_text = text
+            if self.preprocessing_fn:
+                clean_text = self.preprocessing_fn(text, self.nlp)
+            processed_docs.append(self.nlp(clean_text))
+        return processed_docs
 
     def load_corpus(self) -> None:
         """
@@ -477,7 +734,9 @@ class Text2GraphDataset:
                 for file_path in sorted(label_dir.glob("*.txt")):
                     _read_document(file_path, label)
 
-        self.corpus = random.sample(corpus, len(corpus))
+        # self.corpus = random.sample(corpus, 100)
+        # self.corpus = random.sample(corpus, len(corpus))
+        self.corpus = corpus
         self.class_names = labels
 
     def parse(self, corpus=None):
@@ -493,30 +752,18 @@ class Text2GraphDataset:
             list: Parsed graphs in the format (proc_number, label, text, graph).
         """
 
-        def __preprocessing(target: str) -> str:
-            chars_to_remove = "[]()#@$%¨&*\"º^©°|\\-*+;:<>"
-
-            for char in chars_to_remove:
-                target = target.replace(char, " ")
-                target = target.replace("  ", " ")
-
-            target = target.lower().strip()
-
-            # Replace integers with 'number'
-            target = re.sub(r'\b\d+\b', ' number ', target)
-
-            # Normalize whitespace
-            target = target.replace("  ", " ")
-            target = target.replace("\n\n", "\n")
-
-            return target
-
         if corpus is None:
             corpus = self.corpus
 
         parsed_graphs = []
-        for proc_number, label, text in tqdm(corpus, desc="Parsing batch"):
-            graph = self.text_to_graph_parser.parse_document(text.strip(), preprocessing_fn=preprocessing_legal_pt)
+        # Use the parser's class name in the description
+        desc = f"Parsing batch ({self.text_to_graph_parser.__class__.__name__})"
+        for proc_number, label, text in tqdm(corpus, desc=desc):
+            # Note: preprocessing_fn is now applied *inside* parse_document
+            graph = self.text_to_graph_parser.parse_document(
+                text.strip(),
+                preprocessing_fn=self.preprocessing_fn
+            )
             parsed_graphs.append((proc_number, label, text, graph))
 
         return parsed_graphs
@@ -544,7 +791,7 @@ class Text2GraphDataset:
                 A.draw(output_path_png, prog="circo")
 
             except Exception as e:
-                print(f"Error rendering graph: {e}")
+                logging.info(f"Error rendering graph: {e}")
 
         def _save_nx_graph(G, image_path: Path):
             plt.figure(figsize=(16, 9))
@@ -560,8 +807,6 @@ class Text2GraphDataset:
         # Create the output folder if it does not exist
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
-
-        print("Plotting")
 
         logging.info("Plotting")
 
@@ -600,8 +845,7 @@ class Text2GraphDataset:
         else:
             self.parsed_graphs = parsed_graphs
 
-        output_dir = self.path_to_output if output_path is not None else Path(output_path)
-
+        output_dir = self.path_to_output if output_path is None else Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         proc_numbers = []
@@ -611,12 +855,24 @@ class Text2GraphDataset:
         for i, (proc_number, label, text, graph) in tqdm(enumerate(self.parsed_graphs), desc="Storing graphs."):
             try:
                 # Ensure unique filenames across batches
-                graph_file_path = output_dir / f"graph_{start_index + i:07d}.pt"
+                doc_number = start_index + i
+                graph_file_path = output_dir / f"graph_{doc_number:07d}.pt"
                 proc_numbers.append(proc_number)
                 labels.append(label)
                 torch.save((proc_number, label, graph), graph_file_path)
+
+                pyvis_base_path = Path(str(output_dir).replace("interim", "visualization"))
+                os.makedirs(pyvis_base_path, exist_ok=True)
+                pyvis_path = pyvis_base_path / f"graph_{doc_number:07d}.html"
+
+                visualize_structural_graph(
+                    nx_graph=graph,
+                    dep_label_map=self.text_to_graph_parser.dep_label_map,
+                    output_filename=str(pyvis_path)
+                )
+
             except Exception as e:
-                print(f"Failed to save graph {proc_number}: {e}")
+                logging.info(f"Failed to save graph {proc_number}: {e}")
                 continue
 
         # Save metadata incrementally with duplicate checking
@@ -640,7 +896,7 @@ class Text2GraphDataset:
         with open(metadata_path, "wb") as f:
             pickle.dump(metadata, f)
 
-        print(f"Batch {batch_index} processed and saved successfully!")
+        logging.info(f"Batch {batch_index} processed and saved successfully!")
 
     def save_graphs_individually(self, output_dir):
         output_dir = Path(output_dir)

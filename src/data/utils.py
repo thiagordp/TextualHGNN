@@ -84,9 +84,9 @@ def _preprocess_labels(target: str) -> str:
 def add_new_relation_to_graph(
     target_graph: nx.MultiDiGraph,
     node_1_lemma: str,
-    node_1_pos: str,  # NEW: POS tag for the first node
+    node_1_pos: str,
     node_2_lemma: str,
-    node_2_pos: str,  # NEW: POS tag for the second node
+    node_2_pos: str,
     edge: str,
     text_embedding,
     device: torch.device | str,
@@ -103,7 +103,7 @@ def add_new_relation_to_graph(
     edge = _preprocess_labels(edge)
 
     if not check_extracted_info(node_1_lemma, node_2_lemma, edge):
-        return
+        return 1
 
     # 2. Create unique composite identifiers for nodes
     node_1_id = f"{node_1_lemma}::{node_1_pos}"
@@ -122,7 +122,7 @@ def add_new_relation_to_graph(
                 logging.warning(
                     f"Cannot add new node '{node_id}'. Graph capacity of {max_num_nodes} reached."
                 )
-                return
+                return False
 
             # Retrieve embedding using the lemma for semantic meaning
             node_embedding = retrieve_text_embeddings(
@@ -141,7 +141,9 @@ def add_new_relation_to_graph(
 
     # 4. Add the edge between the unique nodes
     if target_graph.has_node(node_1_id) and target_graph.has_node(node_2_id):
-        target_graph.add_edge(node_1_id, node_2_id, label=edge)
+        target_graph.add_edge(node_1_id, node_2_id, label=edge, weight=1.0)
+
+    return True
 
 
 

@@ -1,5 +1,6 @@
 import re
 import spacy
+from bs4 import BeautifulSoup
 
 
 def preprocessing_legal_pt(text: str, nlp_spacy):
@@ -417,3 +418,29 @@ def preprocessing_legal_pt_voto_relatorio(text: str) -> str:
 
     # Junta todas as seções formatadas com duas quebras de linha
     return "\n\n".join(formatted_output)
+
+
+def preprocessing_imdb(raw_text: str, nlp) -> str:
+    """
+    Strips non-linguistic HTML artifacts ("true noise")
+    and normalizes whitespace ("byproduct noise") to prepare
+    raw text for a dependency parser like SpaCy.
+
+    This function *preserves* all linguistic signals,
+    including punctuation, casing, and stopwords.
+    """
+
+    # 1. Parse HTML to remove tags and decode entities (e.g., &nbsp;)
+    # We use "html.parser" as it's built-in and sufficient.
+    try:
+        text_content = BeautifulSoup(raw_text, "html.parser").get_text()
+    except Exception as e:
+        # Fallback for any unexpected parsing error
+        logging.info(f"BeautifulSoup parsing error: {e}. Falling back to raw text.")
+        text_content = raw_text
+
+    # 2. Normalize all whitespace (spaces, \n, \t) into a single space
+    # and remove any leading/trailing whitespace.
+    normalized_text = re.sub(r'\s+', ' ', text_content).strip()
+
+    return normalized_text

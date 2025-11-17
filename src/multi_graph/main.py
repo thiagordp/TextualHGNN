@@ -60,7 +60,7 @@ def load_documents_from_disk(base_path_str: str, class_map: dict, samples_per_cl
     """
     base_path = Path(base_path_str)
     docs_by_class = {}
-    print("\n--- Loading Documents From Disk ---")
+    logging.info("\n--- Loading Documents From Disk ---")
 
     for class_name, sub_dir in class_map.items():
         class_path = base_path / sub_dir
@@ -68,7 +68,7 @@ def load_documents_from_disk(base_path_str: str, class_map: dict, samples_per_cl
             logging.warning(f"Directory not found: {class_path}. Skipping class '{class_name}'.")
             continue
 
-        print(f"Loading from: {class_path}")
+        logging.info(f"Loading from: {class_path}")
         file_paths = list(class_path.glob("*.txt"))
         random.shuffle(file_paths)  # Shuffle for random sampling
 
@@ -102,7 +102,7 @@ def run():
     class_names = list(sorted(raw_docs_by_class.keys()))
     model_cfg.OUT_CHANNELS = len(class_names)  # Dynamically set output channels
 
-    print("\n--- Cleaning and Preprocessing Raw Text ---")
+    logging.info("\n--- Cleaning and Preprocessing Raw Text ---")
     docs_by_class = {}
     for class_name, docs_with_filenames in raw_docs_by_class.items():
         cleaned_docs = [
@@ -127,7 +127,7 @@ def run():
     all_hetero_graphs, all_labels, all_filenames, all_nx_graphs = [], [], [], []
 
     for class_idx, (class_name, docs) in enumerate(docs_by_class.items()):
-        print(f"\n--- Building Graphs for Class: {class_name} ---")
+        logging.info(f"\n--- Building Graphs for Class: {class_name} ---")
 
         # --- Unpack all three return values from the builder ---
         nx_graphs_for_class, hetero_graphs_for_class, processed_filenames = builder.process_documents(docs)

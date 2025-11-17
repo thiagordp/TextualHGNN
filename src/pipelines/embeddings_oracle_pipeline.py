@@ -43,21 +43,21 @@ def main():
     # Test retrieving embedding for a term
     embedding = embedding_oracle.retrieve_embedding(test_term)
     if embedding is not None:
-        print(f"Embedding for '{test_term}': {embedding[:5]}... (truncated)")
+        logging.info(f"Embedding for '{test_term}': {embedding[:5]}... (truncated)")
 
     # Test retrieving top-k similar terms by string
     top_k_by_string = embedding_oracle.retrieve_top_k_by_string("apple", k=10)
-    print(f"Top 5 terms similar to 'apple': {top_k_by_string}")
+    logging.info(f"Top 5 terms similar to 'apple': {top_k_by_string}")
 
     # Test retrieving top-k similar terms by embedding
     if embedding is not None:
         top_k_by_embeddings = embedding_oracle.retrieve_top_k_by_embeddings(embedding, k=10)
-        print(f"Top 5 terms similar to the embedding of '{test_term}': {top_k_by_embeddings}")
+        logging.info(f"Top 5 terms similar to the embedding of '{test_term}': {top_k_by_embeddings}")
 
     # Test retrieving the most similar term to a list of terms
     terms_list = ["apple", "banana", "fruit"]
     most_similar_to_list = embedding_oracle.retrieve_most_similar_to_list(terms_list, k=10)
-    print(f"Most similar terms to the list {terms_list}: {most_similar_to_list}")
+    logging.info(f"Most similar terms to the list {terms_list}: {most_similar_to_list}")
 
 
 if __name__ == '__main__':

@@ -10,6 +10,8 @@ import warnings
 
 from sklearn.neural_network import MLPClassifier
 
+from src.utils.general_utils import setup_logging
+
 warnings.filterwarnings('ignore')
 
 from sklearn.linear_model import LogisticRegression
@@ -79,20 +81,6 @@ def format_time_elapsed(start_time: float) -> str:
     minutes, seconds = divmod(rem, 60)
     return f"{int(hours):02}:{int(minutes):02}:{seconds:06.3f}"
 
-
-# Setup Logging
-def setup_logging(log_folder='logs', log_file='diffpool_training.log'):
-    os.makedirs(log_folder, exist_ok=True)
-    log_path = os.path.join(log_folder, log_file)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_path),
-            logging.StreamHandler()
-        ]
-    )
 
 setup_logging(log_file="shallow_training.log")
 

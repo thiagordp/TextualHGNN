@@ -89,9 +89,9 @@ class ConceptGrounding:
         else:
             y_indices = y_tensor.long()  # Ensure it's integer type
 
-        print("=" * 80)
-        print(y_indices, y_indices.ndim, type(y_indices))
-        print("=" * 80)
+        logging.info("=" * 80)
+        logging.info(y_indices, y_indices.ndim, type(y_indices))
+        logging.info("=" * 80)
 
         self.y_test = int(y_indices.view(-1).cpu())
 

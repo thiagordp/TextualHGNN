@@ -190,8 +190,8 @@ def main():
     hi_score = (completeness + conformity) / 2
     e_score = (2 * macro_f1 * hi_score) / (macro_f1 + hi_score) if (macro_f1 + hi_score) > 0 else 0
 
-    print(f"y-preds: {preds}")
-    print(f"y_tests: {labels}")
+    logging.info(f"y-preds: {preds}")
+    logging.info(f"y_tests: {labels}")
 
     logging.info("Classification report")
     logging.info(classification_report(labels, preds, digits=3))

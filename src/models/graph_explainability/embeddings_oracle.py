@@ -16,7 +16,6 @@ import torch
 from src.models.graph_explainability.base_oracle import BaseOracle
 
 
-logging.basicConfig(level=logging.INFO)
 
 
 class EmbeddingOracle(BaseOracle):
@@ -54,7 +53,7 @@ class EmbeddingOracle(BaseOracle):
         new_terms = list(set(self.model.index_to_key) - existing_terms)
 
         random.shuffle(new_terms)
-        print(f"Starting batch insertion of {len(new_terms)} new terms into the database...")
+        logging.info(f"Starting batch insertion of {len(new_terms)} new terms into the database...")
 
         self.cursor.execute("PRAGMA synchronous = OFF")
         self.cursor.execute("PRAGMA journal_mode = MEMORY")
@@ -70,7 +69,7 @@ class EmbeddingOracle(BaseOracle):
                 gc.collect()
 
         except Exception as e:
-            print(f"Error during batch insertion: {e}")
+            logging.info(f"Error during batch insertion: {e}")
         finally:
             self.cursor.execute("PRAGMA synchronous = FULL")
             self.cursor.execute("PRAGMA journal_mode = WAL")
@@ -85,7 +84,7 @@ class EmbeddingOracle(BaseOracle):
             self.cursor.executemany(query, batch_data)
             self.conn.commit()
         except Exception as e:
-            print(f"Error during bulk insertion: {e}")
+            logging.info(f"Error during bulk insertion: {e}")
 
     def add_term(self, term: str):
         words = term.split()
@@ -94,9 +93,9 @@ class EmbeddingOracle(BaseOracle):
         if valid_embeddings:
             average_embedding = np.mean(valid_embeddings, axis=0)
             self._insert_embedding(term, average_embedding)
-            print(f"Added term '{term}' with averaged embedding to the database.")
+            logging.info(f"Added term '{term}' with averaged embedding to the database.")
         else:
-            print(f"No valid words found in the term '{term}'. Nothing added to the database.")
+            logging.info(f"No valid words found in the term '{term}'. Nothing added to the database.")
 
     def _insert_embedding(self, term: str, embedding: np.ndarray):
         embedding_blob = pickle.dumps(embedding.astype(np.float32))
@@ -137,7 +136,7 @@ class EmbeddingOracle(BaseOracle):
             embedding = pickle.loads(result[0])
             return torch.tensor(embedding, dtype=torch.float32, device=self.device)
         else:
-            print(f"Embedding for term '{term}' not found in the database.")
+            logging.info(f"Embedding for term '{term}' not found in the database.")
             return None
 
     def _get_all_embeddings(self) -> Tuple[List[str], torch.Tensor]:
@@ -255,7 +254,7 @@ class EmbeddingOracle(BaseOracle):
                 "terms": result
             }
         else:
-            print("No valid embeddings found for the provided terms.")
+            logging.info("No valid embeddings found for the provided terms.")
             return {
                 "terms": ["None"]
             }

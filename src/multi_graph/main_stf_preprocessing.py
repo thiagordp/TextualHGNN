@@ -367,7 +367,7 @@ def run():
 
         # Process files iteratively to save memory
         for class_idx, (class_name, docs) in enumerate(docs_by_class.items()):
-            print(f"\n--- Building Graphs for Class: {class_name} ---")
+            logging.info(f"\n--- Building Graphs for Class: {class_name} ---")
 
             nx_graphs_for_class, hetero_graphs_for_class, processed_filenames = builder.process_documents(docs)
 

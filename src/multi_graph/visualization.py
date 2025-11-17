@@ -14,6 +14,7 @@ import matplotlib.colors as mcolors
 from pyvis.network import Network
 from src.models.graph_explainability.concept_grounding import ConceptGrounding
 
+
 def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, output_filename: str):
     """
     Creates an interactive visualization of the initial graph structure,
@@ -71,7 +72,6 @@ def visualize_structural_graph(nx_graph: nx.MultiDiGraph, dep_label_map: dict, o
     net.show_buttons(filter_=['nodes', 'edges'])
     net.save_graph(output_filename)
     # logging.info(f"Successfully saved structural graph to {output_filename}.")
-
 
 
 def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, dep_label_map: dict,
@@ -162,7 +162,7 @@ def visualize_learned_attentions(nx_graph: nx.MultiDiGraph, explanation: dict, d
     # logging.info(f"Successfully saved learned attention graph to {output_filename}.")
 
 
-def visualize_diffpool_explanation(cg:ConceptGrounding, nx_graph: nx.MultiDiGraph, output_filename: str,
+def visualize_diffpool_explanation(cg: ConceptGrounding, nx_graph: nx.MultiDiGraph, output_filename: str,
                                    assignment_threshold: float = 0.05):
     """
     Creates an interactive visualization of a DiffPool explanation.
@@ -259,3 +259,62 @@ def visualize_diffpool_explanation(cg:ConceptGrounding, nx_graph: nx.MultiDiGrap
     net.save_graph(output_filename)
 
     logging.info(f"Successfully saved DiffPool explanation graph to {output_filename}.")
+
+
+def visualization_l0(nx_graph: nx.MultiDiGraph, output_filename: str) -> None:
+    from pyvis.network import Network
+
+    net = Network(
+        height="900px",
+        width="100%",
+        bgcolor="#222222",
+        font_color="white",
+        directed=True,        # <-- mark graph as directed
+        cdn_resources='remote'
+    )
+
+    node_color_map = {'document': '#d62828', 'L2': '#fca311', 'L1': '#003049', 'word': '#f77f00'}
+    edge_color_map = {'belongs': '#2a9d8f', 'seq': '#e76f51', 'dep': '#8d99ae', 'sent_seq': '#e76f51'}
+
+    # Add nodes
+    for node_id, data in nx_graph.nodes(data=True):
+        node_label = data.get('lemma', data.get('text', node_id))
+        node_pos   = data.get('pos', '')
+        net.add_node(
+            n_id=node_id,
+            label=node_label,
+            title=node_pos,
+            color=node_color_map.get('word', '#f77f00'),
+            size=12
+        )
+
+    # Determine max weight for scaling widths
+    max_weight = 0.0
+    for u, v, key, data in nx_graph.edges(keys=True, data=True):
+        w = data.get('weight', 0.0)
+        if w > max_weight:
+            max_weight = w
+
+    # Add edges (with arrows)
+    for u, v, key, data in nx_graph.edges(keys=True, data=True):
+        edge_type = data.get('label', data.get('dep', ''))
+        weight    = data.get('weight', 0.0)
+
+        if max_weight > 0:
+            width = (weight / max_weight) * 9 + 1  # width range [1,10]
+        else:
+            width = 1
+
+        net.add_edge(
+            source=u,
+            to=v,
+            color=edge_color_map.get(edge_type, 'grey'),
+            width=width,
+            title=f"Type: {edge_type}<br>Weight: {weight:.3f}",
+            arrowStrikethrough=False  # <-- makes arrow head clean
+        )
+
+    net.toggle_physics(True)
+    net.show_buttons(filter_=True)
+    net.save_graph(output_filename)
+

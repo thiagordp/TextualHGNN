@@ -12,4 +12,4 @@ def get_timestamp():
         get_timestamp()
         '20240814_103045'
     """
-    return datetime.now().strftime('%Y%m%d_%H%M%S')
+    return datetime.now().strftime('%Y.%m.%d_%H.%M.%S')

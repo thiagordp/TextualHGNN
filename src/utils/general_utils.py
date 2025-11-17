@@ -41,7 +41,7 @@ def setup_logging(log_folder='logs', log_file='diffpool_training.log'):
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_path),
+            logging.FileHandler(log_path, delay=True),
             logging.StreamHandler()
         ]
     )

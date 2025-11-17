@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import List, Dict
 
@@ -73,12 +74,12 @@ class LLMOracle(BaseOracle):
 
                 json_output = self.extract_json(output)
             except Exception as e:
-                print(f"Attempt {tentative + 1}: Error fetching response - {e}")
+                logging.info(f"Attempt {tentative + 1}: Error fetching response - {e}")
                 tentative += 1
                 output = None
 
         if not json_output:
-            print("No valid output received from the model.")
+            logging.info("No valid output received from the model.")
             return {}
 
         return json_output
@@ -118,7 +119,7 @@ def main():
     api_key = os.getenv("TOGETHER_API_KEY")
 
     if not api_key:
-        print("API Key not found. Please set the TOGETHER_API_KEY environment variable.")
+        logging.info("API Key not found. Please set the TOGETHER_API_KEY environment variable.")
         return
 
     # Instantiate the LLMOracle class with the API key
@@ -134,9 +135,9 @@ def main():
     # Get the best fitting terms
     try:
         terms = oracle.concept_grounding_from_words(words)
-        print("Received terms:", terms)
+        logging.info("Received terms:", terms)
     except Exception as e:
-        print("Error occurred while fetching terms:", e)
+        logging.info("Error occurred while fetching terms:", e)
 
 
 if __name__ == "__main__":

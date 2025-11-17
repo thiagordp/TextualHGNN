@@ -1,3 +1,4 @@
+import logging
 import shutil
 from pathlib import Path
 import random
@@ -24,7 +25,7 @@ def create_and_split_dataset(
     excel_path = base_path / "mapping.xlsx"
 
     if not source_path.is_dir():
-        print(f"Error: Raw source directory not found at '{source_path.resolve()}'")
+        logging.info(f"Error: Raw source directory not found at '{source_path.resolve()}'")
         return
 
     base_path.mkdir(parents=True, exist_ok=True)
@@ -32,7 +33,7 @@ def create_and_split_dataset(
     # === Step 1: Rename files ===
     all_raw_files = sorted(list(source_path.rglob("*.txt")), key=lambda p: p.name)
     if not all_raw_files:
-        print("No .txt files found!")
+        logging.info("No .txt files found!")
         return
 
     mapping_data = []
@@ -54,7 +55,7 @@ def create_and_split_dataset(
 
     df_mapping = pd.DataFrame(mapping_data)
     df_mapping.to_excel(excel_path, index=False, engine="openpyxl")
-    print(f"Initial mapping.xlsx created with {len(df_mapping)} entries.")
+    logging.info(f"Initial mapping.xlsx created with {len(df_mapping)} entries.")
 
     # === Step 2: Split ===
     output_paths = {
@@ -102,9 +103,9 @@ def create_and_split_dataset(
     )
     df_mapping.to_excel(excel_path, index=False, engine="openpyxl")
 
-    print("\nProcessing complete!")
+    logging.info("\nProcessing complete!")
     for split, count in total_counts.items():
-        print(f"  - {split.capitalize()} set: {count} files")
+        logging.info(f"  - {split.capitalize()} set: {count} files")
 
 if __name__ == "__main__":
     # --- CONFIGURATION ---

@@ -1,4 +1,5 @@
 # src/pipelines/visualize_clusters.py
+import logging
 
 import torch
 import pandas as pd
@@ -34,7 +35,7 @@ def load_trained_model(model_path, config, device):
     # Load the saved weights
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
-    print(f"Model loaded successfully from {model_path}")
+    logging.info(f"Model loaded successfully from {model_path}")
     return model
 
 
@@ -59,7 +60,7 @@ def analyze_cluster_assignments(model, loader, token_map, device):
     # {cluster_id: [list of all tokens assigned to it]}
     cluster_token_aggregator = defaultdict(list)
 
-    print("Analyzing cluster assignments across the dataset...")
+    logging.info("Analyzing cluster assignments across the dataset...")
     with torch.no_grad():
         for data in tqdm.tqdm(loader, desc="Processing Batches"):
             data = data.to(device)
@@ -91,7 +92,7 @@ def get_top_k_tokens_for_clusters(cluster_tokens, k=2):
     """
     Finds the top k most frequent tokens for each cluster.
     """
-    print("\nCalculating top tokens for each cluster...")
+    logging.info("\nCalculating top tokens for each cluster...")
     cluster_labels = {}
 
     # Sort clusters by ID for consistent output
@@ -124,8 +125,8 @@ if __name__ == '__main__':
     BEST_MODEL_PATH = "models/grid_search/STF_HC/best_model_20250822_022641_lk1000.0_en0.1_rc0.1_ct1.0_bl1.0_rp10.0_l210.0.pth"  # <-- EDIT HERE
 
     if not os.path.exists(BEST_MODEL_PATH):
-        print(f"Error: Model file not found at '{BEST_MODEL_PATH}'")
-        print("Please update the BEST_MODEL_PATH variable with the correct path to your trained model.")
+        logging.info(f"Error: Model file not found at '{BEST_MODEL_PATH}'")
+        logging.info("Please update the BEST_MODEL_PATH variable with the correct path to your trained model.")
     else:
         # --- 2. Load Data and Token Mapping ---
         # We only need the test set for this analysis
@@ -140,12 +141,12 @@ if __name__ == '__main__':
 
 
         for data in test_loader:
-            print(data.keys())
+            logging.info(data.keys())
             doc_id = data_sample_id = int.from_bytes(data.doc_id, byteorder='little')
             # e.g. ['x', 'edge_index', 'edge_attr', 'y', ...]
 
             for key, value in data.items():
-                print(f"{key}: {value}")
+                logging.info(f"{key}: {value}")
 
         try:
             token_map = get_token_mapping(tgd_test)
@@ -160,15 +161,15 @@ if __name__ == '__main__':
             cluster_labels = get_top_k_tokens_for_clusters(cluster_tokens, k=2)
 
             # --- 5. Print the Results ---
-            print("\n--- Cluster Visualization Results (L1) ---")
-            print("Each cluster is labeled with its top 2 most frequent tokens.\n")
+            logging.info("\n--- Cluster Visualization Results (L1) ---")
+            logging.info("Each cluster is labeled with its top 2 most frequent tokens.\n")
 
             results_df = pd.DataFrame(list(cluster_labels.items()), columns=['Cluster ID', 'Top Tokens'])
-            print(results_df.to_string(index=False))
+            logging.info(results_df.to_string(index=False))
 
         except AttributeError as e:
-            print(f"\nAn error occurred: {e}")
-            print("Could not find the token vocabulary in the dataset object.")
-            print("Please check the implementation of 'TextGraphDatasetOnDisk' to ensure 'inv_vocab' is available.")
+            logging.info(f"\nAn error occurred: {e}")
+            logging.info("Could not find the token vocabulary in the dataset object.")
+            logging.info("Please check the implementation of 'TextGraphDatasetOnDisk' to ensure 'inv_vocab' is available.")
         except Exception as e:
-            print(f"\nAn unexpected error occurred: {e}")
+            logging.info(f"\nAn unexpected error occurred: {e}")

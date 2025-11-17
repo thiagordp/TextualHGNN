@@ -2,9 +2,10 @@ import json
 import logging
 import os
 import time
-from collections import deque
-from typing import Tuple, Optional
+from collections import deque, defaultdict
+from typing import Tuple, Optional, Callable, Dict
 
+import numpy as np
 import torch
 import torch_geometric.transforms as T
 import torch.nn.functional as F
@@ -19,7 +20,7 @@ from tqdm import tqdm
 from torch_geometric.data import Data
 
 from src.data.text_graph_dataset_ondisk import TextGraphDatasetOnDisk
-from src.models.graph_classification.gnn import DiffPool
+from src.models.graph_classification.gnn import DiffPool, DiffPoolMinCut
 from src.models.graph_classification.utils import loss_config_to_tag
 from src.models.graph_explainability.cg_evaluation_metrics import \
     ConceptConformityCalculator, ModularityCalculator, SilhouetteScoreCalculator, ConceptCompletenessCalculator
@@ -82,7 +83,8 @@ def calculate_class_weights(dataset: TextGraphDatasetOnDisk, device: torch.devic
 
 
 # Load Datasets with Transformations
-def load_datasets(root: str, max_num_nodes: int, node_feature_size: int, lang: str) -> Tuple[
+def load_datasets(root: str, max_num_nodes: int, node_feature_size: int, lang: str, preprocessing_fn=None,
+                  graph_builder_type: str = "graph_of_words") -> Tuple[
     TextGraphDatasetOnDisk, ...]:
     """
     Load datasets and apply transformations.
@@ -92,6 +94,8 @@ def load_datasets(root: str, max_num_nodes: int, node_feature_size: int, lang: s
         max_num_nodes (int): Maximum number of nodes in the graphs.
         node_feature_size (int): Size of the node feature vectors.
         lang (str)
+        preprocessing_fn (Callable, optional): Preprocessing function.
+        graph_builder_type (str, optional): The name of the builder to use.
 
     Returns:
         tuple: Train, validation, and test datasets.
@@ -108,7 +112,9 @@ def load_datasets(root: str, max_num_nodes: int, node_feature_size: int, lang: s
             transform=T.ToDense(num_nodes=max_num_nodes),
             max_num_nodes=max_num_nodes,
             node_feature_size=node_feature_size,
-            lang=lang
+            lang=lang,
+            preprocessing_fn=preprocessing_fn,
+            graph_builder_type=graph_builder_type
         ))
     return tuple(datasets)
 
@@ -154,7 +160,16 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
         tuple: The initialized model and optimizer.
 
     """
-    model = DiffPool(
+    # model = DiffPool(
+    #     max_num_nodes=max_num_nodes,
+    #     in_channels=in_channels,
+    #     hidden_channels=hidden_dim,
+    #     out_channels=out_channels,
+    #     inner_channels=inner_dim,
+    #     softmax_assign=softmax_assign,
+    #     decrease_proportion=decrease_proportion
+    # ).to(device)
+    model = DiffPoolMinCut(
         max_num_nodes=max_num_nodes,
         in_channels=in_channels,
         hidden_channels=hidden_dim,
@@ -164,7 +179,7 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
         decrease_proportion=decrease_proportion
     ).to(device)
 
-    logging.info(f"Model structure:")
+    logging.info(f"Model structure: {model.__class__.__name__}")
     logging.info(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=l2)
@@ -173,123 +188,138 @@ def initialize_model(in_channels, out_channels, max_num_nodes, lr, hidden_dim,
     return model, optimizer
 
 
-def compute_aux_losses(model_outputs, data, loss_config):
+def _compute_layer_losses(S: torch.Tensor, Z: torch.Tensor, X: torch.Tensor) -> Dict[str, torch.Tensor]:
     """
-    Compute auxiliary losses based on interpretable concept structure.
+    Helper function to compute regularization losses for a *single* pooling layer.
 
-    Input:
-        model_outputs:
-            Tuple from model(..., debug=True):
-                logits: [B, num_classes]
-                link_loss: scalar per-graph structural loss
-                entropy_loss: scalar per-graph entropy regularization
-                emb_l1: [B, C, d]     # Level-1 concept embeddings
-                emb_l2: [B, C2, d]    # Level-2 concept embeddings (unused here)
-                s01: [B, N, C]        # Soft assignment of N tokens to C clusters
-                s12: [B, C, C2]       # (unused)
-
-        data:
-            Batch object with:
-                x: [B, N, d] — token embeddings
-
-        loss_config:
-            Dictionary specifying the weight for each loss component.
+    Args:
+        S: Assignment matrix [B, N_in, N_out]
+        Z: Cluster embeddings [B, N_out, D]
+        X: Input node embeddings [B, N_in, D]
 
     Returns:
-        aux_loss: scalar tensor to be added to total loss
+        A dictionary of scalar loss tensors.
+    """
+    if Z is None or S is None:
+        return {
+            "recon": torch.tensor(0.0, device=X.device),
+            "contrastive": torch.tensor(0.0, device=X.device),
+            "balance": torch.tensor(0.0, device=X.device),
+            "repel": torch.tensor(0.0, device=X.device)
+        }
+
+    # --- Reconstruction Loss (from paper) ---
+    # L_recon = || Z - S^T_norm @ X ||
+    # This ensures the cluster embedding Z is close to the mean of its members X.
+    s_sum = S.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1, N_out]
+    s_norm = S / s_sum  # [B, N_in, N_out]
+
+    S_transpose_norm = s_norm.transpose(1, 2)  # [B, N_out, N_in]
+    X_bar = S_transpose_norm @ X  # [B, N_out, D] (mean of members)
+    recon_loss = F.mse_loss(Z, X_bar)
+
+    # --- Contrastive Loss ---
+    Z_norm = F.normalize(Z, dim=-1)  # [B, N_out, D]
+    X_bar_norm = F.normalize(X_bar, dim=-1)  # [B, N_out, D]
+
+    sim_matrix = torch.einsum("bcd,bkd->bck", Z_norm, X_bar_norm) / 0.07  # temp=0.07
+
+    B, N_out, _ = Z.shape
+    device = Z.device
+    labels = torch.arange(N_out, device=device).unsqueeze(0).expand(B, -1)  # [B, N_out]
+
+    contrastive_loss = F.cross_entropy(
+        sim_matrix.reshape(-1, N_out),
+        labels.reshape(-1)
+    )
+
+    # --- Balance Loss ---
+    # Encourages clusters to have equal size by penalizing deviation from uniform.
+    S_sum_per_cluster = S.sum(dim=1)  # [B, N_out]
+    S_sum_total = S_sum_per_cluster.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1]
+    S_dist = S_sum_per_cluster / S_sum_total  # [B, N_out]
+
+    target_dist = torch.full_like(S_dist, 1.0 / N_out)
+    balance_loss = F.kl_div(
+        S_dist.log().clamp(min=-100),
+        target_dist,
+        reduction='batchmean'
+    )
+
+    # --- Repel Loss ---
+    # Encourage cluster embeddings Z to be far apart
+    Z_norm = F.normalize(Z, dim=-1)  # [B, N_out, D]
+    Z_sim = Z_norm @ Z_norm.transpose(1, 2)
+    identity_mask = torch.eye(N_out, device=device).unsqueeze(0)  # [1, N_out, N_out]
+    repel_loss = F.relu(Z_sim * (1.0 - identity_mask)).mean()
+
+    return {
+        "recon": recon_loss,
+        "contrastive": contrastive_loss,
+        "balance": balance_loss,
+        "repel": repel_loss
+    }
+
+
+def compute_aux_losses(
+        model_outputs: tuple,
+        data: Data,
+        loss_config: dict
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """
+    [REFACTORED]
+    Compute auxiliary losses for *all* hierarchical layers (L1 and L2).
     """
 
-    logits, link_loss, entropy_loss, (emb_l1, _), (emb_l2, _), (s01, s12) = model_outputs
-    x = data.x  # [B, N, d]
-    B, N, d = x.shape
-    _, _, C = s01.shape  # C: number of concepts
+    # [FIX] Unpack the new 7-item tuple from our 2-level model
+    logits, link_loss_sum, entropy_loss_sum, (emb_l1, adj_l1), (emb_l2, adj_l2), cluster_logits, (s01,
+                                                                                                  s12) = model_outputs
 
-    aux_loss = 0.0
+    X_l0 = data.x  # Initial node features [B, N, D]
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (1) Link Prediction Loss
-    # Encourages cluster assignments to preserve adjacency structure:
-    #
-    #   \mathcal{L}_{link} = \lVert A - SS^\top \rVert_F^2
-    #
-    # (computed inside DiffPool)
-    # ─────────────────────────────────────────────────────────────────────────────
+    aux_loss = torch.tensor(0.0, device=X_l0.device)
+    loss_report = {}
+
+    # --- 1. DiffPool/MinCut Structural Losses (already summed) ---
     if loss_config.get("link", 0.0) > 0:
-        aux_loss += loss_config["link"] * link_loss.mean()
+        aux_loss += loss_config["link"] * link_loss_sum
+        loss_report["link_loss"] = link_loss_sum.item()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (2) Entropy Loss
-    # Encourages sharper (low-entropy) cluster assignments:
-    #
-    #   \mathcal{L}_{entropy} = \sum_{i,c} S_{ic} \log S_{ic}
-    #
-    # (also from DiffPool)
-    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("entropy", 0.0) > 0:
-        aux_loss += loss_config["entropy"] * entropy_loss.mean()
+        aux_loss += loss_config["entropy"] * entropy_loss_sum
+        loss_report["entropy_loss"] = entropy_loss_sum.item()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (3) Reconstruction Loss
-    # Encourage each concept embedding to be close to the mean of its tokens:
-    #
-    #   \bar{x}_c = \frac{1}{\sum_i S_{ic}} \sum_i S_{ic} x_i
-    #   \mathcal{L}_{recon} = \sum_c \lVert z_c - \bar{x}_c \rVert^2
-    #
-    # where z_c = emb_l1[c]
-    # ─────────────────────────────────────────────────────────────────────────────
-    s_sum = s01.sum(dim=1, keepdim=True).clamp(min=1e-8)  # [B, 1, C]
-    s_norm = s01 / s_sum  # [B, N, C]
-    x_bar = torch.einsum("bnc,bnd->bcd", s_norm, x)  # [B, C, d]
+    # --- 2. Per-Layer Regularization Losses ---
 
+    # --- Level 1 Losses (Tokens -> Concepts) ---
+    l1_losses = _compute_layer_losses(s01, emb_l1, X_l0)
+
+    # --- Level 2 Losses (Concepts -> Arguments) ---
+    # L2 losses are computed using L1's output (emb_l1) as input
+    l2_losses = _compute_layer_losses(s12, emb_l2, emb_l1)
+
+    # --- Sum L1 and L2 losses and add to total aux_loss ---
     if loss_config.get("reconstruction", 0.0) > 0:
-        recon_loss = F.mse_loss(emb_l1, x_bar)
-        aux_loss += loss_config["reconstruction"] * recon_loss
+        recon_total = l1_losses["recon"] + l2_losses["recon"]
+        aux_loss += loss_config["reconstruction"] * recon_total
+        loss_report["recon_loss"] = recon_total.item()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (4) Contrastive Loss (InfoNCE)
-    # Pull each cluster embedding toward its x_bar; push away from others:
-    #
-    #   \mathcal{L}_{con} = -\sum_c \log \frac{ \exp(\cos(z_c, \bar{x}_c)/\tau) }
-    #                                      { \sum_{c'} \exp(\cos(z_c, \bar{x}_{c'})/\tau) }
-    #
-    # with temperature \tau = 0.07
-    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("contrastive", 0.0) > 0:
-        z_c = F.normalize(emb_l1, dim=-1)  # [B, C, d]
-        x_c = F.normalize(x_bar, dim=-1)  # [B, C, d]
-        sim = torch.einsum("bcd,bkd->bck", z_c, x_c) / 0.07  # [B, C, C]
-        log_prob = F.log_softmax(sim, dim=-1)
-        contrastive_loss = -log_prob.diagonal(dim1=1, dim2=2).mean()
-        aux_loss += loss_config["contrastive"] * contrastive_loss
+        contrastive_total = l1_losses["contrastive"] + l2_losses["contrastive"]
+        aux_loss += loss_config["contrastive"] * contrastive_total
+        loss_report["contrastive_loss"] = contrastive_total.item()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (5) Balance Loss
-    # Encourage clusters to receive equal total assignment:
-    #
-    #   \mathcal{L}_{balance} = \sum_j \left( \sum_i S_{ij} \right)^2
-    #
-    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("balance", 0.0) > 0:
-        size = s01.sum(dim=1)  # [B, C]
-        balance_loss = (size ** 2).mean()
-        aux_loss += loss_config["balance"] * balance_loss
+        balance_total = l1_losses["balance"] + l2_losses["balance"]
+        aux_loss += loss_config["balance"] * balance_total
+        loss_report["balance_loss"] = balance_total.item()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # (6) Repel Loss
-    # Encourage concept embeddings to be diverse (repel each other):
-    #
-    #   \mathcal{L}_{repel} = \sum_{j \ne k} \max(0, \delta - \lVert z_j - z_k \rVert^2)
-    #
-    # ─────────────────────────────────────────────────────────────────────────────
     if loss_config.get("repel", 0.0) > 0:
-        z = emb_l1  # [B, C, d]
-        zz = z.unsqueeze(2) - z.unsqueeze(1)  # [B, C, C, d]
-        dist = (zz ** 2).sum(dim=-1)  # [B, C, C]
-        mask = ~torch.eye(C, device=z.device).bool()  # [C, C]
-        repel_loss = F.relu(1.0 - dist.masked_select(mask[None])).mean()
-        aux_loss += loss_config["repel"] * repel_loss
+        repel_total = l1_losses["repel"] + l2_losses["repel"]
+        aux_loss += loss_config["repel"] * repel_total
+        loss_report["repel_loss"] = repel_total.item()
 
-    return aux_loss
+    return aux_loss, loss_report
 
 
 def train(
@@ -299,115 +329,82 @@ def train(
         loss_fn,
         device: torch.device,
         loss_config: dict,
-        accumulation_steps: int = 5,  # 👈  New
+        accumulation_steps: int = 1,  # 👈  New
         scaler: Optional[GradScaler] = None,
         return_acc: bool = False,
         verbose: bool = True,
-) -> Tuple[float, Optional[float]]:
+) -> Tuple[float, Optional[float], Dict[str, float]]:
     """
     Trains the GNN model for one epoch.
-
-    Args:
-        model (torch.nn.Module): The GNN model to be trained.
-        loader (torch_geometric.data.DataLoader): DataLoader providing the training data.
-        optimizer (torch.optim.Optimizer): Optimizer for model parameters.
-        device
-        loss_config (dict): Loss configuration dictionary.
-        verbose
-        loss_fn (callable): Loss function to be minimized.
-        accumulation_steps
-        scaler
-        return_acc (bool, optional): If True, returns the training accuracy along with the loss. Defaults to False.
-
-    Returns:
-        float: Average training loss over the epoch.
-        float, optional: Training accuracy if `return_acc` is True.
-
-    Notes:
-        - The function trains the model for one full pass over the dataset provided by the DataLoader.
-        - The model is set to training mode (`model.train()`) to ensure layers like dropout and batch normalization
-          behave correctly during training.
-        - The loss is calculated for each batch and accumulated to compute the average loss.
-        - If `return_acc` is True, the function also computes and returns the accuracy.
+    [CHANGED] Returns a loss report dictionary.
     """
-    assert accumulation_steps >= 1, "`accumulation_steps` must be ≥ 1"
-
     model.train()
-
     scaler = scaler or GradScaler(enabled=torch.cuda.is_available())
 
-    total_loss, seen_samples = 0.0, 0
+    total_cls_loss, total_aux_loss, seen_samples = 0.0, 0.0, 0
     correct_preds = 0
 
-    # Smoothing helpers
-    window_size = 10
-    roll_cls, roll_link, roll_ent = (
-        deque(maxlen=window_size) for _ in range(3)
-    )
+    # Create an accumulator for the loss report
+    epoch_loss_report = defaultdict(float)
 
     pbar = tqdm(loader, disable=False, desc="Train")
     optimizer.zero_grad(set_to_none=True)  # more efficient
 
-    for step, data in enumerate(pbar, start=1):
-
+    for data in pbar:
         data = data.to(device)
-        optimizer.zero_grad()
 
+        # Note: data.adj is the dense, weighted adj matrix from ToDense
+        # data.x is the node features
         with autocast(enabled=torch.cuda.is_available(), device_type=str(device)):
+            # Pass all dense data to the model
             model_outputs = model(data.x, data.adj, data.mask, debug=True)
-            logits, obj1, obj2, g_layer1, g_layer2, s = model_outputs
+            logits, lp_loss, entropy_loss, (emb_l1, adj_l1), (emb_l2, adj_l2), cluster_logits, (s01,
+                                                                                                s12) = model_outputs
 
-            y = torch.as_tensor(data.y, device=device).squeeze()
-            if y.dim() > 1:
-                y = y.sum(dim=1)  # keep your original intention
+            y = torch.tensor([label[0] for label in data.y], dtype=torch.long, device=device)
 
+            # 1. Compute Classification Loss
             cls_loss = loss_fn(logits, y)
-            aux_loss = compute_aux_losses(model_outputs, data, loss_config or {})
+            aux_loss, batch_loss_report = compute_aux_losses(
+                model_outputs, data, loss_config or {}
+            )
             loss = (cls_loss + aux_loss) / accumulation_steps
 
         scaler.scale(loss).backward()
 
-        # Update after every `accumulation_steps` mini-batches
-        if step % accumulation_steps == 0 or step == len(loader):
-            # Optional gradient clipping BEFORE scaler.step
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # Optional gradient clipping
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad(set_to_none=True)
 
-        # # --- Metrics & logging ------------------------------------------------
-        #
-        # cls_val, link_val, ent_val = (
-        #     cls_loss.item(),
-        #     link_loss.mean().item(),
-        #     ent_loss.mean().item(),
-        # )
-        # roll_cls.append(cls_val)
-        # roll_link.append(link_val)
-        # roll_ent.append(ent_val)
-        #
-        # pbar.set_postfix(
-        #     cls=f"{sum(roll_cls) / len(roll_cls):.4f}",
-        #     link=f"{alpha_link * sum(roll_link) / len(roll_link):.4f}",
-        #     ent=f"{alpha_entropy * sum(roll_ent) / len(roll_ent):.4f}",
-        # )
-        # pbar.update(0)  # 👈 Force redraw
-
+        # --- Metrics & logging ---
         batch_size = y.size(0)
-        total_loss += loss.item() * accumulation_steps * batch_size  # undo /acc_steps
+        total_cls_loss += cls_loss.item() * batch_size
+        total_aux_loss += aux_loss.item() * batch_size
         seen_samples += batch_size
+
+        # Accumulate metrics for epoch report
+        for k, v in batch_loss_report.items():
+            epoch_loss_report[k] += v * batch_size
 
         if return_acc:
             preds = logits.argmax(dim=1)
             correct_preds += (preds == y).sum().item()
 
-    # logging.info(
-    #     f"Loss information:\tcls={sum(roll_cls) / len(roll_cls):.4f},\tlink={alpha_link * sum(roll_link) / len(roll_link):.4f},\tent={alpha_entropy * sum(roll_ent) / len(roll_ent):.4f}")
-    avg_loss = total_loss / seen_samples
+    avg_cls_loss = total_cls_loss / seen_samples
+    avg_aux_loss = total_aux_loss / seen_samples
     avg_acc = (correct_preds / seen_samples) if return_acc else None
-    return (avg_loss, avg_acc) if return_acc else avg_loss
+
+    # Finalize epoch loss report
+    final_loss_report = {k: v / seen_samples for k, v in epoch_loss_report.items()}
+    final_loss_report["cls_loss"] = avg_cls_loss
+    final_loss_report["aux_loss"] = avg_aux_loss
+    final_loss_report["total_loss"] = avg_cls_loss + avg_aux_loss
+
+    return avg_cls_loss, avg_acc, final_loss_report
 
 
 @torch.no_grad()
@@ -446,8 +443,7 @@ def test(model, loader, loss_fn, device, verbose=True):
         output, _, _ = model(data.x, data.adj, data.mask)
 
         # Prepare target labels
-        y = torch.tensor(data.y).to(device)
-        y = torch.sum(y, dim=1)  # Summing along the appropriate dimension
+        y = torch.tensor([label[0] for label in data.y], dtype=torch.long, device=device)
 
         # Compute the loss
         loss = loss_fn(output, y)
@@ -471,15 +467,15 @@ def test(model, loader, loss_fn, device, verbose=True):
             pass
 
     # Calculate evaluation metrics
-    accuracy = total_correct / len(loader.dataset)
+    total_samples = len(true_labels)
+    accuracy = total_correct / total_samples
     macro_f1 = f1_score(true_labels, pred_labels, average='macro', zero_division=0.0)
-    average_loss = total_loss / len(loader.dataset)
+    average_loss = total_loss / total_samples
 
-    cr = classification_report(true_labels, pred_labels, output_dict=True)
+    cr = classification_report(true_labels, pred_labels, output_dict=True, zero_division=0.0)
     return accuracy, macro_f1, true_labels, pred_labels, average_loss, cr
 
 
-# Replace the existing train_and_validate function with this one:
 def train_and_validate(model, train_loader, val_loader,
                        optimizer, loss_fn, patience, epochs, lr, hidden_dim, batch_size,
                        use_softmax, decrease_prop, dataset_name, device, timestamp, grid_search=False, verbose=True,
@@ -498,14 +494,19 @@ def train_and_validate(model, train_loader, val_loader,
         f"runs/diffpool_{dataset_name}_{timestamp}_pat{patience}_ep{epochs}_lr{lr}_hd{hidden_dim}_bs{batch_size}_sm{use_softmax}_dp{decrease_prop}_{loss_tag}_gs{grid_search}"
     )
 
-    for epoch in range(1, epochs + 1):
+    for epoch in tqdm(range(1, epochs + 1), desc="Training epochs:"):
+
         start_time = time.time()
 
         # --- TRAINING ---
-        train_loss, train_acc = train(
+        train_cls_loss, train_acc, train_loss_report = train(
             model=model, loader=train_loader, optimizer=optimizer, loss_fn=loss_fn,
-            return_acc=True, verbose=False, device=device, loss_config=loss_config
+            return_acc=True, verbose=verbose, device=device, loss_config=loss_config
         )
+
+        for k, v in train_loss_report.items():
+            writer.add_scalar(f'Loss/train_{k}', v, epoch)
+        writer.add_scalar('Accuracy/train', train_acc, epoch)
 
         # --- VALIDATION & METRICS ---
         model.eval()
@@ -521,22 +522,31 @@ def train_and_validate(model, train_loader, val_loader,
             for data in val_loader:
                 data = data.to(device)
                 model_outputs = model(data.x, data.adj, data.mask, debug=True)
-                logits, _, _, _, _, (s01, s12) = model_outputs
+                logits, link_loss, entropy_loss, _, _, _, (s01, s12) = model_outputs
                 pred = logits.max(dim=1)[1]
+
+                # print("-----------------------------------")
+                # print(f"Logits: {logits} ({type(logits)})")
+                # print(f"Labels: {data.y} ({type(data.y)})")
+                # print(f"Pred:   {pred}   ({type(pred)}")
+                # print("-----------------------------------")
 
                 all_preds.append(pred.cpu())
 
-                y_tensor = data.y
-                if isinstance(y_tensor, list):
-                    y_tensor = torch.tensor(y_tensor, device=device, dtype=torch.float)
+                # y_tensor = data.y
+                # if isinstance(y_tensor, list):
+                #     y_tensor = torch.tensor(y_tensor, device=device, dtype=torch.float)
+                #
+                # # Convert one-hot labels to class indices
+                # if y_tensor.ndim > 1 and y_tensor.shape[1] > 1:
+                #     y_indices = y_tensor.sum(dim=1)
+                # else:
+                #     y_indices = y_tensor.long()  # Ensure it's integer type
+                #
+                # all_labels.append(y_indices.view(-1).cpu())
+                y_indices = torch.tensor([x[0] for x in data.y], dtype=torch.long).to(device)
 
-                # Convert one-hot labels to class indices
-                if y_tensor.ndim > 1 and y_tensor.shape[1] > 1:
-                    y_indices = y_tensor.sum(dim=1)
-                else:
-                    y_indices = y_tensor.long()  # Ensure it's integer type
-
-                all_labels.append(y_indices.view(-1).cpu())
+                all_labels.append(y_indices)
 
                 # Get concept assignments (we focus on the first layer for interpretability)
                 concept_ids_batch = s01.argmax(dim=-1)
@@ -582,7 +592,7 @@ def train_and_validate(model, train_loader, val_loader,
                     silhouette_calc.add_item(single_graph_data, single_graph_concepts)
 
         # Calculate final metrics for the epoch
-        preds, labels = torch.cat(all_preds).numpy(), torch.cat(all_labels).numpy()
+        preds, labels = torch.cat(all_preds).cpu().numpy(), torch.cat(all_labels).cpu().numpy()
 
         with torch.no_grad():
             total_params = 0
@@ -616,11 +626,11 @@ def train_and_validate(model, train_loader, val_loader,
         writer.add_scalar('Overall/E_Score', e_score, epoch)
 
         logging.info(
-            f'Epoch {epoch:03d} | Acc: {acc:.4f} | F1: {macro_f1:.4f} | Comp: {completeness:.4f} | Conf: {conformity:.4f} | '
-            f'Mod: {modularity:.4f} | Sil: {silhouette:.4f} | '
-            f'E-Score: {e_score:.4f} | Sum Params: {sum_abs_params:.4f}'
+            f'\nEpoch {epoch:03d} | Acc: {acc:.3f} | F1: {macro_f1:.3f} | Comp: {completeness:.3f} | Conf: {conformity:.3f} | '
+            f'Link: {current_link_loss:.3f} | Ent: {current_entropy_loss:.3f} | Recon: {current_recon_loss:.3f} \n'
+            f'\tContr: {current_contrastive_loss:.3f} | Repel: {current_repel_loss:.3f} | Bal: {current_balance_loss:.3f} | '
+            f'E-Score: {e_score:.3f} | Sum Params: {sum_abs_params:.3f}'
         )
-
         # --- MODEL CHECKPOINTING ---
         if e_score > best_e_score:
             best_e_score = e_score

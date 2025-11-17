@@ -106,7 +106,7 @@ def main():
     nx_graphs = str(nx_graphs) + "/*.pt"
     stored_graph_paths = glob.glob(nx_graphs)
     stored_graph_paths = list(stored_graph_paths)
-    print(f"NX Graphs at '{nx_graphs}' with: {len(stored_graph_paths)} NX graphs.")
+    logging.info(f"NX Graphs at '{nx_graphs}' with: {len(stored_graph_paths)} NX graphs.")
 
     #
     # Run CG over all L0/L1
@@ -383,7 +383,7 @@ class HierarchicalGraphVisualizer:
         time.sleep(1)
         self.net.toggle_physics(False)
         self.net.show(filename, notebook=False)
-        print(f"Graph saved to {filename}")
+        logging.info(f"Graph saved to {filename}")
 
 
 if __name__ == "__main__":

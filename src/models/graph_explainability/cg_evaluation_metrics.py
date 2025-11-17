@@ -1,4 +1,5 @@
 # src/models/graph_explainability/cg_evaluation_metrics.py
+import logging
 
 import torch
 import networkx as nx
@@ -144,10 +145,14 @@ class SilhouetteScoreCalculator:
         node_features = data.x.cpu().numpy()
         labels = concept_ids.cpu().numpy()
 
-        # Silhouette score is only defined if there is more than 1 cluster
-        if len(np.unique(labels)) > 1:
+        unique_labels = np.unique(labels)
+        num_labels = len(unique_labels)
+        num_samples = len(labels)
+
+        if 1 < num_labels < num_samples:
             self.total_silhouette += silhouette_score(node_features, labels)
             self.num_graphs += 1
+
 
     def calculate(self):
         """Calculates the final average silhouette score."""

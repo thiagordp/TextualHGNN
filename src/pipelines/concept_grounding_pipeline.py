@@ -115,7 +115,7 @@ def main():
 
     stored_graph_paths = glob.glob(nx_graphs)
     stored_graph_paths = list(stored_graph_paths)
-    print(f"NX Graphs at '{nx_graphs}' with: {len(stored_graph_paths)} NX graphs.")
+    logging.info(f"NX Graphs at '{nx_graphs}' with: {len(stored_graph_paths)} NX graphs.")
 
     docs_explained = 0
     doc_index = 1

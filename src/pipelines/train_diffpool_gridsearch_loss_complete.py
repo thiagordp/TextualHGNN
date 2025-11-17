@@ -10,14 +10,18 @@ import torch
 import tqdm
 from torch import nn
 
+from src.data.preprocessing import preprocessing_imdb, preprocessing_legal_pt_voto_relatorio
 from src.models.graph_classification.train_and_evaluate import load_datasets, initialize_model, calculate_class_weights, \
     train_and_validate, create_loaders
 from src.utils.general_utils import load_config, setup_logging
 from src.utils.models_utils import get_timestamp
 
+# Options: "graph_of_words", "phrase_subgraphs"
+GRAPH_BUILDER_TYPE = "graph_of_words"
+
 PARAMS_GRIDSEARCH = {
     "english": {
-        'LR': [0.0001], 'INNER_DIM': [64], 'BATCH_SIZE': [16],
+        'LR': [0.001], 'INNER_DIM': [32], 'BATCH_SIZE': [8, 32],
         'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.1]
     },
     "italian": {
@@ -29,9 +33,14 @@ PARAMS_GRIDSEARCH = {
         'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.02, 0.1]
     },
     "portuguese_voto": {
-        'LR': [1e-4], 'INNER_DIM': [32], 'BATCH_SIZE': [4],
-        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.1]
+        'LR': [1e-4], 'INNER_DIM': [16, 32], 'BATCH_SIZE': [4, 8],
+        'SOFTMAX_ASSIGN': [True], "DECREASE_PROPORTION": [0.01, 0.05, 0.1]
     }
+}
+
+PREPROCESSING_FNS = {
+    "english": preprocessing_imdb,
+    "portuguese_voto": preprocessing_legal_pt_voto_relatorio
 }
 
 import itertools
@@ -47,12 +56,12 @@ def generate_loss_configs(sample_size=100, seed=42):
 
     # Define possible values for each loss term separately
     loss_values = {
-        "link": [10, 100, 1000],           # will also be scaled by 100
-        "entropy": [0.01, 0.1],
+        "link": [1000, 5000, 10000],  # will also be scaled by 100
+        "entropy": [0.001, 0.01, 0.1, 1.0],
         "reconstruction": [0.1, 1.0],
-        "contrastive": [0.01, 0.1],
-        "balance": [0.01, 0.1, 1.0],
-        "repel": [0.001, 0.01]
+        "contrastive": [0.01, 0.1, 1.0],
+        "balance": [0.001, 0.01, 0.1, 1.0],
+        "repel": [0.001, 0.01, 0.1, 1.0]
     }
 
     scale_loss = {}  # special scaling for 'link'
@@ -71,7 +80,7 @@ def generate_loss_configs(sample_size=100, seed=42):
                     config[term] = weights[i] * scale_loss[term] if term in scale_loss else weights[i]
 
                 config['id'] = f"cfg_{config_id:05d}"
-                config['l2'] = 0.01
+                config['l2'] = 0.05
 
                 generated_configs.append(config)
                 config_id += 1
@@ -79,7 +88,7 @@ def generate_loss_configs(sample_size=100, seed=42):
     # Baseline configuration
     final_configs = [{
         "link": 0.0, "entropy": 0.0, "reconstruction": 0.0,
-        "contrastive": 0.0, "balance": 0.0, "repel": 0.0, "l2": 0.01, "id": f"cfg_{0:05d}"
+        "contrastive": 0.0, "balance": 0.0, "repel": 0.0, "l2": 0.05, "id": f"cfg_{0:05d}"
     }]
 
     random.seed(seed)
@@ -103,8 +112,10 @@ def generate_loss_configs(sample_size=100, seed=42):
 
 
 LOSS_CONFIG_GRID = generate_loss_configs(sample_size=200)
-LANG = "portuguese_voto"
+LANG = "english"
+# LANG = "portuguese_voto"
 PARAM_GRID = PARAMS_GRIDSEARCH[LANG]
+PREPROCESSING_FN=PREPROCESSING_FNS[LANG]
 CONFIG = load_config(LANG, "src/utils/config.json")
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 timestamp = get_timestamp()
@@ -151,7 +162,8 @@ def grid_search():
                 # --- DATA and MODEL SETUP ---
                 tgd_train, tgd_val, tgd_test = load_datasets(
                     root=CONFIG["ROOT"], max_num_nodes=CONFIG["NUM_NODES"],
-                    node_feature_size=CONFIG["NODE_FEATURE_DIM"], lang=LANG
+                    node_feature_size=CONFIG["NODE_FEATURE_DIM"], lang=LANG,
+                    preprocessing_fn=PREPROCESSING_FN
                 )
                 train_loader, val_loader, _ = create_loaders(tgd_train, tgd_val, tgd_test, batch_size=batch_size)
                 model, optimizer = initialize_model(
@@ -202,7 +214,7 @@ def grid_search():
                 if results:
                     save_results(results, timestamp, best_config_results, verbose=False)
 
-                print("Sleeping for 10s...")
+                logging.info("Sleeping for 10s...")
                 time.sleep(10)
 
     pbar.close()
