@@ -301,7 +301,7 @@ class Text2DP(Text2Graph):
             # "SPACE",  # Whitespace
             # "SYM",  # Symbol
             # "X",  # Other
-            "DET",
+            # "DET",
             # "CCONJ"
         }
 
@@ -446,7 +446,7 @@ class PhraseSubgraphBuilder(Text2Graph):
     """
 
     def __init__(self, nlp: Language, text_embedding: TextEmbedding,
-                 max_num_nodes=1000, min_pmi_threshold=0.0):
+                 max_num_nodes=1000, min_pmi_threshold=0.0, use_pmi:bool=False):
         """
         Initializes the builder.
 
@@ -469,10 +469,10 @@ class PhraseSubgraphBuilder(Text2Graph):
 
         # [STANDARD] Replicate the token filters from Text2DP
         self.pos_to_ignore: Set[str] = {
-            "SPACE",  # Whitespace
-            "SYM",  # Symbol
-            "X",  # Other
+            "PUNCT"
         }
+        self.use_pmi=use_pmi
+
 
     @property
     def nlp(self):
@@ -488,7 +488,6 @@ class PhraseSubgraphBuilder(Text2Graph):
         """[STANDARD] Centralized check to validate a token."""
         return token.pos_ not in self.pos_to_ignore and token.text.strip()
 
-    # --- [NEW] PMI Helper Methods from Snippet ---
     def _preprocess_node_text(self, text: str) -> str:
         return text.lower().strip()
 
@@ -574,7 +573,8 @@ class PhraseSubgraphBuilder(Text2Graph):
             # are confusing the from_networkx converter.
             G.add_node(
                 node_id,
-                x=embedding
+                x=embedding,
+                token=token.text.strip().lower()
                 # lemma=token.lemma_.lower().strip(), # <-- REMOVED
                 # pos=token.pos_                     # <-- REMOVED
             )
@@ -582,7 +582,7 @@ class PhraseSubgraphBuilder(Text2Graph):
         if G.number_of_nodes() == 0:
             return None
 
-            # --- Pass 2: Create PMI-Weighted Dependency Edges (Directional) ---
+        # --- Pass 2: Create PMI-Weighted Dependency Edges (Directional) ---
         for token in doc:
             head_id = token.head.i
             token_id = token.i
@@ -596,12 +596,12 @@ class PhraseSubgraphBuilder(Text2Graph):
             if not self._is_valid_dependency(h, c, token.dep_):
                 continue
 
-            pmi_val = self.pmi.get((h, c))
-
-            if pmi_val is None or pmi_val < self.min_pmi:
-                continue
-
-            G.add_edge(head_id, token_id, label=token.dep_, weight=pmi_val + 1)
+            if self.use_pmi:
+                pmi_val = max(0.0, self.pmi.get((h, c), 0))
+                edge_value = pmi_val + 1
+            else:
+                edge_value = 1
+            G.add_edge(token_id, head_id, label=token.dep_, weight=edge_value)
 
         # --- Pass 3: Create Stitching Edges (Directional, weight=1.0) ---
         prev_root_id = None
@@ -613,6 +613,7 @@ class PhraseSubgraphBuilder(Text2Graph):
 
             if prev_root_id is not None:
                 G.add_edge(prev_root_id, current_root_id, label="next_root", weight=1.0)
+                G.add_edge(current_root_id, prev_root_id, label="prev_root", weight=1.0)
 
             prev_root_id = current_root_id
 
@@ -734,9 +735,8 @@ class Text2GraphDataset:
                 for file_path in sorted(label_dir.glob("*.txt")):
                     _read_document(file_path, label)
 
-        # self.corpus = random.sample(corpus, 100)
-        # self.corpus = random.sample(corpus, len(corpus))
-        self.corpus = corpus
+        self.corpus = random.sample(corpus, 200)
+        #self.corpus = corpus
         self.class_names = labels
 
     def parse(self, corpus=None):
@@ -764,6 +764,15 @@ class Text2GraphDataset:
                 text.strip(),
                 preprocessing_fn=self.preprocessing_fn
             )
+
+            if graph is None:
+                continue
+            isolated_nodes = list(nx.isolates(graph))
+            if len(isolated_nodes) > 0:
+                logging.info(f'{"=" * 50} {proc_number} {"=" * 50}')
+                logging.info("Isolated nodes")
+                logging.info(isolated_nodes)
+
             parsed_graphs.append((proc_number, label, text, graph))
 
         return parsed_graphs
@@ -865,11 +874,7 @@ class Text2GraphDataset:
                 os.makedirs(pyvis_base_path, exist_ok=True)
                 pyvis_path = pyvis_base_path / f"graph_{doc_number:07d}.html"
 
-                visualize_structural_graph(
-                    nx_graph=graph,
-                    dep_label_map=self.text_to_graph_parser.dep_label_map,
-                    output_filename=str(pyvis_path)
-                )
+                # visualize_l0()
 
             except Exception as e:
                 logging.info(f"Failed to save graph {proc_number}: {e}")

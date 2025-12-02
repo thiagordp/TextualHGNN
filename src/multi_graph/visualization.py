@@ -278,7 +278,7 @@ def visualization_l0(nx_graph: nx.MultiDiGraph, output_filename: str) -> None:
 
     # Add nodes
     for node_id, data in nx_graph.nodes(data=True):
-        node_label = data.get('lemma', data.get('text', node_id))
+        node_label = data.get('token', data.get('text', node_id))
         node_pos   = data.get('pos', '')
         net.add_node(
             n_id=node_id,
@@ -310,7 +310,7 @@ def visualization_l0(nx_graph: nx.MultiDiGraph, output_filename: str) -> None:
             to=v,
             color=edge_color_map.get(edge_type, 'grey'),
             width=width,
-            title=f"Type: {edge_type}<br>Weight: {weight:.3f}",
+            title=f"Type: {edge_type}\nWeight: {weight:.3f}",
             arrowStrikethrough=False  # <-- makes arrow head clean
         )
 

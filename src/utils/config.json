@@ -16,7 +16,7 @@
     "ROOT": "data/datasets/Imprisonment-IT"
   },
   "english": {
-    "EPOCHS": 10,
+    "EPOCHS": 5,
     "PATIENCE": 20,
     "LR": 0.005,
     "LR_DECAY": 0,
@@ -54,7 +54,7 @@
     "LR_DECAY": 0,
     "NODE_FEATURE_DIM": 100,
     "HIDDEN_DIM": 100,
-    "NUM_NODES": 3000,
+    "NUM_NODES": 1000,
     "INNER_DIM": 32,
     "BATCH_SIZE": 32,
     "SOFTMAX_ASSIGN": true,

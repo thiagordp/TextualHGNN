@@ -78,7 +78,8 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
             batch_size: int = 16,
             lang="english",
             preprocessing_fn=None,
-            graph_builder_type: str = "graph_of_words"
+            graph_builder_type: str = "graph_of_words",
+            use_pmi:bool=False
     ):
         """
         Initializes the TextGraphDatasetOnDisk.
@@ -117,6 +118,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
         self.lang = lang
         self.preprocessing_fn = preprocessing_fn
         self.graph_builder_type = graph_builder_type
+        self.use_pmi=use_pmi
 
         # Define a path for the PMI cache, specific to the builder and split
         self.pmi_cache_path = Path(self.interim_dir) / f"pmi_cache_{self.graph_builder_type}.pkl"
@@ -211,7 +213,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
          Processes the raw data files and converts them into a list of `Data` objects.
          Called automatically by PyG when processed files are not available
         """
-        logging.info("Split: ", self.split)
+        logging.info(f"Split: {self.split}")
         logging.info(f"Max nodes: {self.max_num_nodes}")
         logging.info(f"Lang:      {self.lang}")
         logging.info(f"Using Graph Builder: {self.graph_builder_type}")
@@ -240,7 +242,8 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
                 nlp=nlp,
                 text_embedding=text_embedding_model,
                 max_num_nodes=self.max_num_nodes,
-                min_pmi_threshold=0.0  # [NEW] Set PMI threshold
+                min_pmi_threshold=0.0 ,
+                use_pmi=self.use_pmi
             )
         else:
             del temp_config_loader
@@ -265,8 +268,9 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
         text_to_graph_dp.load_corpus()
 
         # 4. Compute PMI if using the PhraseSubgraphBuilder
-        if self.graph_builder_type == "phrase_subgraphs":
+        if self.graph_builder_type == "phrase_subgraphs" and self.use_pmi:
             logging.info("\n--- Computing or Loading PMI ---")
+
             if self.pmi_cache_path.exists():
                 logging.info(f"Loading cached PMI from {self.pmi_cache_path}...")
                 with open(self.pmi_cache_path, 'rb') as f:
@@ -283,6 +287,7 @@ class TextGraphDatasetOnDisk(OnDiskDataset):
                     pickle.dump(self.text2graph_parser.pmi, f)
 
         logging.info("Text->Graph Parsing")
+
         # 5. Run the text-to-graph parsing (which now uses the pre-computed PMI)
         self.process_text2graph(text_to_graph_dp)  # Pass the object
 

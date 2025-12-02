@@ -1,3 +1,4 @@
+import logging
 import re
 import spacy
 from bs4 import BeautifulSoup
@@ -444,3 +445,86 @@ def preprocessing_imdb(raw_text: str, nlp) -> str:
     normalized_text = re.sub(r'\s+', ' ', text_content).strip()
 
     return normalized_text
+
+
+import re
+import unicodedata
+import contractions
+import logging
+from bs4 import BeautifulSoup
+
+
+def preprocess_text_merged(raw_text: str, nlp) -> str:
+    """
+    Unified text preprocessing pipeline combining:
+      - HTML stripping + whitespace normalization (IMDB pipeline)
+      - Special-character replacement
+      - Unicode normalization
+      - Contraction expansion
+      - spaCy token-level normalization, with lowercase except PROPN and "I"
+    """
+
+    # ---------------------------------------------------------
+    # PART 1 — IMDB PIPELINE: HTML + WHITESPACE NORMALIZATION
+    # ---------------------------------------------------------
+    try:
+        text = BeautifulSoup(raw_text, "html.parser").get_text()
+    except Exception as e:
+        logging.info(f"BeautifulSoup parsing error: {e}. Falling back to raw text.")
+        text = raw_text
+
+    # Normalize whitespace early
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # ---------------------------------------------------------
+    # PART 2 — SPECIAL CHARACTER REPLACEMENTS
+    # ---------------------------------------------------------
+    def _replace_special_chars(target: str) -> str:
+        replacements = {
+            "<br />": "\n", "\ufeff": "",
+            "&": " and ", "%": " percent ", "--": " - ", "²": " squared ",
+            "®": " registered ", "™": " trademark ", "°": " degrees ",
+            "½": " half ", "¼": " quarter ", "¾": " three quarters ",
+            "–": "-", "—": "-", "‘": "'", "’": "'", "“": "\"", "”": "\"",
+            "´": "'", "`": "'", "¨": "\"", "…": "...", "...": "... ",
+            "€": " euro ", "£": " pound ", "$": " dollar ", "**": "*", "!": "! ", "?": "? ", ".": ". ",
+            ")": " ) ", "(": " ( "
+        }
+
+        for old, new in replacements.items():
+            target = target.replace(old, new)
+
+        # remove leftover HTML tags
+        target = re.sub(r"<[^>]+>", "", target)
+        return target
+
+    text = _replace_special_chars(text)
+
+    # ---------------------------------------------------------
+    # PART 3 — UNICODE NORMALIZATION
+    # ---------------------------------------------------------
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("utf-8", "ignore")
+
+    # ---------------------------------------------------------
+    # PART 4 — CONTRACTION EXPANSION
+    # ---------------------------------------------------------
+    text = contractions.fix(text)
+
+    # ---------------------------------------------------------
+    # PART 5 — spaCy TOKEN-LEVEL PROCESSING
+    # ---------------------------------------------------------
+    doc = nlp(text)
+    processed = []
+
+    for token in doc:
+        if token.text == "I" or token.pos_ == "PROPN":
+            processed.append(token.text_with_ws)
+        else:
+            processed.append(token.text_with_ws.lower())
+
+    # Final whitespace cleanup
+    final_text = "".join(processed)
+    final_text = re.sub(r"\s+", " ", final_text).strip()
+
+    return final_text

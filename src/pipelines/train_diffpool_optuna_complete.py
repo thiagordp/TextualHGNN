@@ -12,14 +12,15 @@ import optuna
 from optuna.trial import TrialState
 from torch import nn
 
-from src.data.preprocessing import preprocessing_imdb, preprocessing_legal_pt_voto_relatorio
+from src.data.preprocessing import preprocessing_imdb, preprocessing_legal_pt_voto_relatorio, preprocess_text_merged
 from src.models.graph_classification.train_and_evaluate import load_datasets, initialize_model, calculate_class_weights, \
-    train_and_validate, create_loaders
+    train_and_validate, create_loaders, test
 from src.utils.general_utils import load_config, setup_logging
 from src.utils.models_utils import get_timestamp
 
 PREPROCESSING_FNS = {
-    "english": preprocessing_imdb,
+    "english": preprocess_text_merged,
+    # "english": preprocessing_imdb,
     "portuguese_voto": preprocessing_legal_pt_voto_relatorio
 }
 
@@ -32,11 +33,13 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 timestamp = get_timestamp()
 # GRAPH_BUILDER_TYPE = "graph_of_words"  # Or "phrase_subgraphs"
 GRAPH_BUILDER_TYPE = "phrase_subgraphs"  # Or "phrase_subgraphs"
+USE_PMI = False
 
 # Optuna Configuration
-N_TRIALS = 10  # Total number of HPO trials to run
+N_TRIALS = 2  # Total number of HPO trials to run
+FINAL_TRAIN_EPOCHS = 50  # Epochs for final retraining
 HPO_STORAGE_DB = f"sqlite:///hpo_results_{CONFIG['DATASET']}.db"
-HPO_STUDY_NAME = f"diffpool_loss_hpo_{CONFIG['DATASET']}_v9"
+HPO_STUDY_NAME = f"diffpool_loss_hpo_{CONFIG['DATASET']}_{timestamp}"
 RESULTS_CSV_PATH = f"hpo_results_{CONFIG['DATASET']}_{timestamp}.csv"
 
 setup_logging(log_file=f"hpo_experiment_{CONFIG['DATASET']}_loss_{timestamp}.log")
@@ -46,6 +49,7 @@ logging.info(f"DEVICE: {DEVICE}")
 logging.info(f"GRAPH BUILDER TYPE: {GRAPH_BUILDER_TYPE}")
 logging.info(f"Optuna Storage: {HPO_STORAGE_DB}")
 logging.info(f"Optuna Study Name: {HPO_STUDY_NAME}")
+logging.info(f"Use PMI: {USE_PMI}")
 
 
 def objective(trial: optuna.Trial, tgd_train, tgd_val) -> float:
@@ -59,9 +63,9 @@ def objective(trial: optuna.Trial, tgd_train, tgd_val) -> float:
     try:
         # --- 1. Suggest Model Hyperparameters ---
         lr = trial.suggest_float("LR", 1e-5, 1e-3, log=True)
-        inner_dim = trial.suggest_categorical("INNER_DIM", [16, 32, 64, 128])
-        batch_size = trial.suggest_categorical("BATCH_SIZE", [4, 8, 32, 64])
-        softmax_assign = trial.suggest_categorical("SOFTMAX_ASSIGN", [True, False])
+        inner_dim = trial.suggest_categorical("INNER_DIM", [32, 64, 128])
+        batch_size = trial.suggest_categorical("BATCH_SIZE", [16, 32, 64])
+        softmax_assign = trial.suggest_categorical("SOFTMAX_ASSIGN", [True])
         decrease_proportion = trial.suggest_float("DECREASE_PROPORTION", 0.01, 0.2, log=True)
 
         # --- 2. Suggest Loss Hyperparameters ---
@@ -69,7 +73,7 @@ def objective(trial: optuna.Trial, tgd_train, tgd_val) -> float:
         # which can learn to pick 0.0 (i.e., "turn off" the loss).
         loss_config = {}
         loss_config["l2"] = trial.suggest_float("loss_l2", 1e-5, 1e-2, log=True)
-        loss_config["link"] = trial.suggest_categorical("loss_link", [0.0, 1000, 10000, 50000, 100000])
+        loss_config["link"] = trial.suggest_categorical("loss_link", [0.0, 0.001, 0.01, 0.1, 1.0])
         loss_config["entropy"] = trial.suggest_categorical("loss_entropy", [0.0, 0.001, 0.01, 0.1, 1.0])
         loss_config["reconstruction"] = trial.suggest_categorical("loss_reconstruction", [0.0, 0.001, 0.01, 0.1, 1.0])
         loss_config["contrastive"] = trial.suggest_categorical("loss_contrastive", [0.0, 0.001, 0.01, 0.1, 1.0])
@@ -177,10 +181,11 @@ def main():
         root=CONFIG["ROOT"], max_num_nodes=CONFIG["NUM_NODES"],
         node_feature_size=CONFIG["NODE_FEATURE_DIM"], lang=LANG,
         preprocessing_fn=PREPROCESSING_FN,
-        graph_builder_type=GRAPH_BUILDER_TYPE
+        graph_builder_type=GRAPH_BUILDER_TYPE,
+        use_pmi=USE_PMI
     )
     logging.info("Datasets loaded successfully.")
-    logging.info(f"Train samples: {len(tgd_train)}, Val samples: {len(tgd_val)}")
+    logging.info(f"Train samples: {len(tgd_train)}, Val samples: {len(tgd_val)}, Test samples: {len(tgd_test)}")
 
     # --- 2. Create or Load Optuna Study ---
     study = optuna.create_study(
@@ -198,6 +203,96 @@ def main():
     # --- 4. Save Final Results ---
     logging.info("HPO complete.")
     save_optuna_results(study, RESULTS_CSV_PATH)
+
+    # --- [NEW] 5. Retrain and Test Best Model ---
+    logging.info("\n" + "=" * 100)
+    logging.info("STARTING FINAL TRAINING WITH BEST PARAMETERS...")
+
+    best_params = study.best_params
+    # Re-create the best loss_config from params
+    loss_config = {"id": "best_run"}
+    for k in best_params:
+        if k.startswith("loss_"):
+            loss_config[k.replace("loss_", "")] = best_params[k]
+
+    logging.info(f"Best HPO Params:\n{json.dumps(best_params, indent=2)}")
+
+    # --- 6. Create Final DataLoaders ---
+    # We train on the same train/val splits used during HPO
+    final_train_loader, final_val_loader, final_test_loader = create_loaders(
+        tgd_train, tgd_val, tgd_test, batch_size=best_params['BATCH_SIZE']
+    )
+
+    # --- 7. Initialize Final Model ---
+    final_model, final_optimizer = initialize_model(
+        in_channels=tgd_train.num_node_attributes,
+        out_channels=tgd_train.num_classes,
+        max_num_nodes=CONFIG["NUM_NODES"],
+        lr=best_params['LR'],
+        hidden_dim=CONFIG["HIDDEN_DIM"],
+        inner_dim=best_params['INNER_DIM'],
+        softmax_assign=best_params['SOFTMAX_ASSIGN'],
+        decrease_proportion=best_params['DECREASE_PROPORTION'],
+        device=DEVICE,
+        l2=loss_config["l2"]
+    )
+
+    final_loss_fn = nn.CrossEntropyLoss(
+        weight=calculate_class_weights(tgd_train, device=DEVICE),
+        label_smoothing=0.1
+    )
+
+    # --- 8. Retrain for 50 Epochs ---
+    logging.info(f"Retraining for {FINAL_TRAIN_EPOCHS} epochs...")
+
+    best_model_path, best_epoch_results = train_and_validate(
+        model=final_model,
+        train_loader=final_train_loader,
+        val_loader=final_val_loader,
+        optimizer=final_optimizer,
+        loss_fn=final_loss_fn,
+        patience=FINAL_TRAIN_EPOCHS,  # Set patience = epochs to run full duration
+        epochs=FINAL_TRAIN_EPOCHS,  # Set epochs to 50
+        lr=best_params['LR'],
+        hidden_dim=best_params['INNER_DIM'],
+        batch_size=best_params['BATCH_SIZE'],
+        use_softmax=best_params['SOFTMAX_ASSIGN'],
+        timestamp=f"{timestamp}_final",  # Add a new timestamp
+        decrease_prop=best_params['DECREASE_PROPORTION'],
+        dataset_name=CONFIG["DATASET"],
+        device=DEVICE,
+        grid_search=False,  # This is not a grid search
+        verbose=True,  # We want to see the epoch logs
+        loss_config=loss_config,
+        repetition=0
+    )
+
+    logging.info(f"Final training complete. Best model saved to: {best_model_path}")
+
+    # --- 9. Test on Test Set ---
+    logging.info("\n" + "=" * 100)
+    logging.info("EVALUATING BEST MODEL ON **TEST SET**...")
+
+    # Load the best model state from the retraining
+    final_model.load_state_dict(torch.load(best_model_path))
+
+    test_acc, test_f1, _, _, test_loss, test_report = test(
+        final_model,
+        final_test_loader,
+        final_loss_fn,
+        DEVICE,
+        verbose=False
+    )
+
+    logging.info("=" * 50)
+    logging.info("           FINAL TEST RESULTS           ")
+    logging.info("=" * 50)
+    logging.info(f"  Test Accuracy: {test_acc:.4f}")
+    logging.info(f"  Test Macro F1: {test_f1:.4f}")
+    logging.info(f"  Test Loss:     {test_loss:.4f}")
+    logging.info(
+        f"  (Best Val E-Score was: {best_epoch_results.get('e_score', 0.0):.4f} at epoch {best_epoch_results.get('best_epoch')})")
+    logging.info(f"  Classification Report:\n{json.dumps(test_report, indent=2)}")
 
 
 if __name__ == "__main__":
