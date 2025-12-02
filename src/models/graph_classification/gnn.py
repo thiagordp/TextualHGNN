@@ -71,7 +71,7 @@ class GraphGCN(GNN):
         x = self.ln1(x)
         x = self.conv2(x, adj, mask).relu()
         x = self.ln2(x)
-        return x
+        return F.relu(x)
 
 
 class GraphATT(GNN):
@@ -159,7 +159,7 @@ class DiffPool(GNN):
                 l1 + l2, e1 + e2,
                 (emb_l1, adj_l1),
                 (emb_l2, adj_l2),
-                (cluster_logits, None), # [CHANGED] Pass out cluster_logits for analysis
+                (cluster_logits, None),  # [CHANGED] Pass out cluster_logits for analysis
                 (s01, s12, None)
             )
 
@@ -226,11 +226,11 @@ class DiffPoolMinCut(GNN):
         if debug:
             return (
                 F.log_softmax(x, dim=-1),
-                l1 + l2, e1 + e2,
+                -1 * (l1 + l2), e1 + e2,
                 (emb_l1, adj_l1),
                 (emb_l2, adj_l2),
-                cluster_logits, # [CHANGED] Pass out cluster_logits for analysis
+                cluster_logits,  # [CHANGED] Pass out cluster_logits for analysis
                 (s01, s12)
             )
 
-        return F.log_softmax(x, dim=-1), l1 + l2, e1 + e2
+        return F.log_softmax(x, dim=-1), -1 * (l1 + l2), (e1 + e2)
