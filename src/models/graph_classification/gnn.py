@@ -175,7 +175,7 @@ class DiffPoolMinCut(GNN):
     def __init__(self, max_num_nodes, in_channels, inner_channels, hidden_channels, out_channels,
                  decrease_proportion=0.25, softmax_assign=False):
         super().__init__()
-        # ... (init method is unchanged) ...
+
         num_nodes_l1 = min(max(20, ceil(decrease_proportion * max_num_nodes)), 50)
         self.gnn1_pool = GraphGCN(in_channels, inner_channels, num_nodes_l1)
         self.gnn1_embed = GraphGCN(in_channels, inner_channels, hidden_channels)

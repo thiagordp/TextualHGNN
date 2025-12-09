@@ -204,7 +204,19 @@ class SubgraphX(nn.Module):
         nodes_to_remove = [node for node in range(self.graph.num_nodes) if node not in mcts_node.nodes]
         subg = remove_nodes(self.graph, nodes_to_remove, store_ids=True, device=self.device)
 
-        node_degrees = subg.edge_index[0].bincount() + subg.edge_index[1].bincount()
+        # We use self.graph.num_nodes as minlength to ensure both source and target
+        # degree vectors have the same size (covering all possible node IDs).
+        if subg.edge_index.numel() == 0:
+            node_degrees = torch.zeros(self.graph.num_nodes, device=self.device)
+        else:
+            num_nodes_total = self.graph.num_nodes
+            node_degrees = (
+                    subg.edge_index[0].bincount(minlength=num_nodes_total) +
+                    subg.edge_index[1].bincount(minlength=num_nodes_total)
+            )
+
+        # ------------------------------------------
+
         k = min(subg.num_nodes, self.num_child)
         chosen_nodes = torch.topk(node_degrees, k, largest=self.high2low).indices
         # Até aqui, tudo igual.

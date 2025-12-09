@@ -735,8 +735,8 @@ class Text2GraphDataset:
                 for file_path in sorted(label_dir.glob("*.txt")):
                     _read_document(file_path, label)
 
-        self.corpus = random.sample(corpus, 200)
-        #self.corpus = corpus
+        #self.corpus = random.sample(corpus, 200)
+        self.corpus = corpus
         self.class_names = labels
 
     def parse(self, corpus=None):

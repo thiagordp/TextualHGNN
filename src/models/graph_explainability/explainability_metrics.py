@@ -4,6 +4,8 @@ from typing import List, Tuple, Optional, Union, Any
 import logging
 import inspect
 
+import tqdm
+
 
 class GraphFidelityEvaluator:
     """
@@ -189,7 +191,7 @@ class GraphFidelityEvaluator:
 
         return fid_plus, fid_minus
 
-    # ... fidelity_level_L remains strictly for DiffPool (checks self.is_diffpool) ...
+    # Fidelity_level_L remains strictly for DiffPool (checks self.is_diffpool) ...
     def fidelity_level_L(self,
                          x: torch.Tensor,
                          adj: torch.Tensor,
@@ -202,11 +204,6 @@ class GraphFidelityEvaluator:
 
         if not self.is_diffpool:
             raise ValueError("Level L Fidelity is only defined for DiffPool models.")
-
-        # ... (Existing DiffPool implementation from previous step) ...
-        # [Copy-Paste the hook-based logic here]
-        # For brevity, I will reference the logic from the previous turn
-        # as it remains unchanged for the DiffPool branch.
 
         # Determine target module
         target_module = None
@@ -294,3 +291,158 @@ def calculate_fidelity(model: torch.nn.Module,
         return evaluator.fidelity_level_L(
             x, adj, mask, explanation, level, s_matrices, target_class, baseline_prob
         )
+
+# TODO: Understand the whole code file and debug the function below.
+def jaccard_distance(list_a: List[int], list_b: List[int]) -> float:
+    """
+    Computes Jaccard Distance between two sets of indices.
+    Formula: 1 - (|A n B| / |A u B|)
+    Returns 0.0 if sets are identical, 1.0 if disjoint.
+    """
+    set_a = set(list_a)
+    set_b = set(list_b)
+
+    if not set_a and not set_b:
+        return 0.0  # Both empty, consider stable
+
+    intersection = len(set_a.intersection(set_b))
+    union = len(set_a.union(set_b))
+
+    if union == 0:
+        return 1.0  # Should not happen if check above passes
+
+    return 1.0 - (intersection / union)
+
+
+def calculate_stability(model: torch.nn.Module,
+                        explainer_func: Any,
+                        x: torch.Tensor,
+                        target_class: int = None,
+                        # Flexible args
+                        adj: Optional[torch.Tensor] = None,
+                        mask: Optional[torch.Tensor] = None,
+                        edge_index: Optional[torch.Tensor] = None,
+                        batch: Optional[torch.Tensor] = None,
+                        noise_std: float = 0.01,
+                        n_samples: int = 10,
+                        **explainer_kwargs) -> float:
+    """
+    Calculates Graph Explanation Stability (Instability) [Agarwal et al. 2023].
+    Measures how much the explanation changes under small feature perturbations.
+
+    Args:
+        model: The GNN model.
+        explainer_func: A callable function that takes (model, x, adj/edge_index, ...)
+                        and returns a List[int] of important node indices.
+        x: Input node features.
+        target_class: The class predicted by the model on the original input.
+                      If None, it is computed automatically.
+        noise_std: Standard deviation of Gaussian noise added to features.
+        n_samples: Number of perturbation samples to average over.
+        **explainer_kwargs: Additional arguments to pass to the explainer_func.
+
+    Returns:
+        Average Jaccard Distance (Float). Lower means more stable.
+    """
+    evaluator = GraphFidelityEvaluator(model, x.device)
+
+    # 1. Get Reference (Original) Prediction and Explanation
+    orig_prob, s_mats, pred_class = evaluator.get_reference_prediction(
+        x, adj, mask, edge_index, batch
+    )
+
+    # Use provided target_class or the model's prediction
+    target_label = target_class if target_class is not None else pred_class
+
+    # Generate Original Explanation
+    # Note: We assume explainer_func signature matches standard call
+    explanation_orig = explainer_func(
+        model=model,
+        x=x,
+        adj=adj,
+        edge_index=edge_index,
+        target_class=target_label,
+        **explainer_kwargs
+    )
+
+    distances = []
+    valid_samples = 0
+
+    for _ in range(n_samples):
+        # 2. Perturb Features: x' = x + N(0, std)
+        noise = torch.randn_like(x) * noise_std
+        x_perturbed = x + noise
+
+        # 3. Check Prediction Consistency constraint
+        # "The model's prediction must not change between original and perturbed graph"
+        with torch.no_grad():
+            log_probs_p, _ = evaluator._run_forward(
+                x_perturbed, adj, mask, edge_index, batch,
+                override_S=None  # <--- CHANGED: Let the model re-cluster dynamically
+            )
+            pred_class_p = torch.argmax(torch.exp(log_probs_p), dim=1).item()
+
+        if pred_class_p == target_label:
+            # 4. Generate Perturbed Explanation
+            explanation_perturbed = explainer_func(
+                model=model,
+                x=x_perturbed,
+                adj=adj,
+                edge_index=edge_index,
+                target_class=target_label,
+                **explainer_kwargs
+            )
+
+            # 5. Compute Distance
+            dist = jaccard_distance(explanation_orig, explanation_perturbed)
+            distances.append(dist)
+            valid_samples += 1
+
+
+    # If no perturbations resulted in the same class, stability is undefined (or we can return 0.0/1.0)
+    # Returning None or 0.0 with a warning is safer.
+    if valid_samples == 0:
+        logging.warning("Stability: No perturbed samples maintained the original prediction class.")
+        return 0.0
+
+    return sum(distances) / valid_samples
+
+def calculate_stability_adapted(model, explainer_func, x, adj, mask, target_class,
+                              edge_index=None, n_samples=5, noise_std=0.01, **kwargs):
+    """
+    Calculates Stability allowing DiffPool to re-cluster (override_S=None).
+    """
+    evaluator = GraphFidelityEvaluator(model, x.device)
+
+    expl_orig = explainer_func(
+        model,
+        x,
+        adj,
+        edge_index,
+        target_class,
+        **kwargs
+    )
+
+    distances = []
+    valid_count = 0
+
+    for _ in tqdm.tqdm(range(n_samples), desc="Stability: Perturbing samples"):
+        noise = torch.randn_like(x) * noise_std
+        x_perturbed = x + noise
+
+        with torch.no_grad():
+            log_probs_p, _ = evaluator._run_forward(
+                x_perturbed, adj, mask, override_S=None
+            )
+            pred_p = torch.argmax(torch.exp(log_probs_p), dim=1).item()
+
+        if pred_p == target_class:
+            expl_p = explainer_func(
+                model, x_perturbed, adj, edge_index, target_class, **kwargs
+            )
+            distances.append(jaccard_distance(expl_orig, expl_p))
+            valid_count += 1
+
+    if valid_count == 0: return 0.0
+    return sum(distances) / valid_count
+
