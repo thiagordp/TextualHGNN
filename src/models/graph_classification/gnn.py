@@ -225,7 +225,7 @@ class DiffPoolMinCut(GNN):
 
         if debug:
             return (
-                F.log_softmax(x, dim=-1),
+                x,  # F.log_softmax(x, dim=-1),
                 -1 * (l1 + l2), e1 + e2,
                 (emb_l1, adj_l1),
                 (emb_l2, adj_l2),
@@ -233,4 +233,6 @@ class DiffPoolMinCut(GNN):
                 (s01, s12)
             )
 
-        return F.log_softmax(x, dim=-1), -1 * (l1 + l2), (e1 + e2)
+        return x, -1 * (l1 + l2), (e1 + e2)
+        # return F.log_softmax(x, dim=-1), -1 * (l1 + l2), (e1 + e2)
+

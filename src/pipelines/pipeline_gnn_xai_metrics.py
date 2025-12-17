@@ -18,10 +18,11 @@ from src.models.graph_classification.gnn import DiffPoolMinCut
 from src.models.graph_classification.train_and_evaluate import load_datasets
 from src.utils.general_utils import load_config
 from src.models.graph_explainability.subgraphx import SubgraphX
+from src.models.graph_explainability.graphsvx import GraphSVX
 from src.models.graph_explainability.explainability_metrics import (
     calculate_fidelity,
     calculate_stability,
-    GraphFidelityEvaluator, calculate_stability_adapted
+    GraphFidelityEvaluator, calculate_stability_adapted, calculate_sparsity
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -165,6 +166,40 @@ def run_subgraphx(model, x, adj, edge_index, target_class, **kwargs):
     return []
 
 
+def run_graphsvx(model, x, adj, edge_index, target_class, **kwargs):
+    """
+    Runs GraphSVX.
+    """
+    # 1. Ensure inputs are Dense (GraphSVX modifies Adjacency Matrix directly)
+    # The DiffPoolWrapper in this file already handles Sparse->Dense conversion,
+    # BUT GraphSVX needs to do the masking *before* the model sees it.
+    # So we pass Dense inputs to GraphSVX, and give GraphSVX the model.
+
+    # Check dimensions
+    if x.dim() == 2: x = x.unsqueeze(0)
+    if adj.dim() == 2: adj = adj.unsqueeze(0)
+
+    # 2. Initialize
+    # We pass the 'model' directly because GraphSVX_Adapter handles the forward call conventions
+    explainer = GraphSVX(
+        model=model,
+        device=x.device,
+        num_samples=kwargs.get('num_samples', 100),
+        reg_type='lasso'
+    )
+
+    # 3. Explain
+    top_k = kwargs.get('node_min', 5)  # Reuse node_min as top_k
+
+    explanation_nodes = explainer.explain(
+        x=x,
+        adj=adj,
+        target_class=target_class,
+        top_k=top_k
+    )
+
+    return explanation_nodes
+
 # ==========================================
 # 5. Stability Metric (Local Fix)
 # ==========================================
@@ -219,65 +254,112 @@ def main():
     # Assuming load_datasets applies it via the dataset class internally if passed
     # If not, we apply to the sample.
 
-    # --- D. Sample Selection ---
-    idx = random.randint(0, len(tgd_test) - 1)
-    data = tgd_test[idx]
+    fidelity_plus = []
+    fidelity_minus = []
+    stability = []
+    sparsity = []
 
-    print("ID", int.from_bytes(data.doc_id, byteorder='little'))
+    NUM_SAMPLES = 10
+    for sample_i in range(NUM_SAMPLES):
+        print("=" * 100)
+        print(f"    Explaining new SAMPLE {sample_i:03d} of {NUM_SAMPLES:03d}")
 
-    # Manually apply ToDense if the dataset didn't give us adj
-    if not hasattr(data, "adj") or data.adj is None:
-        data = transform(data)
+        # --- D. Sample Selection ---
+        idx = random.randint(0, len(tgd_test) - 1)
+        data = tgd_test[idx]
 
-    data = data.to(DEVICE)
+        document_id = int.from_bytes(data.doc_id, byteorder='little')
 
-    # Batch dims
-    x = data.x.unsqueeze(0)
-    adj = data.adj.unsqueeze(0)
-    mask = data.mask.unsqueeze(0)
-    edge_index = data.edge_index
+        print("ID", document_id)
 
-    with torch.no_grad():
-        logits = model(x, adj, mask)[0]
-        pred = torch.argmax(logits, dim=1).item()
+        # Manually apply ToDense if the dataset didn't give us adj
+        if not hasattr(data, "adj") or data.adj is None:
+            data = transform(data)
 
-    logging.info(f"Sample {idx} | True: {data.y[0]} | Pred: {pred}")
+        data = data.to(DEVICE)
 
-    # --- E. Evaluation Loop ---
-    # 1. Run SubgraphX
-    logging.info("Running SubgraphX (this may take time)...")
+        # Add Batch dims
+        x = data.x.unsqueeze(0)
+        adj = data.adj.unsqueeze(0)
+        mask = data.mask.unsqueeze(0)
+        edge_index = data.edge_index
 
-    # SubgraphX settings
-    sx_args = {
-        "coef":10,
-        "num_rollouts": 20,
-        "num_child":12,
-        "shapley_steps": 100,  # Low for speed
-        "node_min": 5
-    }
+        with torch.no_grad():
+            logits = model(x, adj, mask)[0]
+            pred = torch.argmax(logits, dim=1).item()
 
-    explanation = run_subgraphx(model, x, adj, edge_index, pred, **sx_args)
-    logging.info(f"Explanation Nodes: {explanation}")
+        logging.info(f"Sample {document_id:06d} | True: {data.y[0]} | Pred: {pred}")
 
-    # 2. Fidelity
-    fid_plus, fid_minus = calculate_fidelity(
-        model=model, x=x, explanation=explanation, level=0,
-        adj=adj, mask=mask
-    )
+        # --- E. Evaluation Loop ---
+        # # 1. Run SubgraphX
+        # logging.info("Running SubgraphX (this may take time)...")
+        #
+        # # SubgraphX settings (same from paper)
+        # sx_args = {
+        #     "coef": 10,
+        #     "num_rollouts": 10, # Put 5 for gridsearch and 20 for official.
+        #     "num_child": 12,
+        #     "shapley_steps": 100,  # Low for speed
+        #     "node_min": 5,
+        #     "high2low":True
+        # }
+        #
+        # explanation = run_subgraphx(model, x, adj, edge_index, pred, **sx_args)
+        # logging.info(f"Explanation Nodes: {explanation}")
+        logging.info("Running GraphSVX...")
 
-    # 3. Stability
-    stab = calculate_stability_adapted(
-        model=model, explainer_func=run_subgraphx,
-        x=x, adj=adj, mask=mask, edge_index=edge_index, target_class=pred,
-        n_samples=10, noise_std=0.01, **sx_args
-    )
+        # Settings
+        svx_args = {
+            "num_samples": 150,  # Higher is better for Shapley approximation
+            "node_min": 10  # Top-K nodes to select
+        }
 
-    print("\n" + "=" * 30)
-    print(f"RESULTS FOR SAMPLE {idx}")
-    print(f"Fidelity+ (Necessity):   {fid_plus:.4f}")
-    print(f"Fidelity- (Sufficiency): {fid_minus:.4f}")
-    print(f"Stability (Jaccard):     {stab:.4f}")
-    print("=" * 30)
+        explanation = run_graphsvx(
+            model,
+            x,
+            adj,
+            edge_index,
+            pred,
+            **svx_args
+        )
+
+        logging.info(f"Explanation: {explanation}")
+
+        # 2. Fidelity
+        fid_plus, fid_minus = calculate_fidelity(
+            model=model, x=x, explanation=explanation, level=0,
+            adj=adj, mask=mask
+        )
+
+        total_nodes = x.size(1)
+        sparsity_score = calculate_sparsity(explanation, total_nodes)
+
+        # 3. Stability
+        stab = calculate_stability_adapted(
+            model=model, explainer_func=run_graphsvx,
+            x=x, adj=adj, mask=mask, edge_index=edge_index, target_class=pred,
+            n_samples=50, noise_std=0.05, **svx_args
+        )
+
+        print("\n" + "=" * 40)
+        print(f" EXPLANATION EVALUATION (Sample {idx})")
+        print("=" * 40)
+        print(f" Fidelity+ (Necessity):   {fid_plus:.4f}  (Higher is Better)")
+        print(f" Fidelity- (Sufficiency): {fid_minus:.4f} (Lower is Better)")
+        print(f" Stability (Jaccard):     {stab:.4f}  (Lower is Better)")
+        print(f" Sparsity:                {sparsity_score:.4f}  (Higher is Better)")  # <--- PRINT IT
+        print("=" * 40)
+
+        fidelity_minus.append(fid_minus)
+        fidelity_plus.append(fid_plus)
+        stability.append(stab)
+        sparsity.append(sparsity_score)
+
+    print("|" * 50, "RESULTS", "|" * 50)
+    print(f"Fidelity+:      {np.mean(fidelity_plus):.4f} ({np.std(fidelity_plus):.4f})")
+    print(f"Fidelity-:      {np.mean(fidelity_minus):.4f} ({np.std(fidelity_minus):.4f})")
+    print(f"Stability:      {np.mean(stability):.4f} ({np.std(stability):.4f})")
+    print(f"Sparsity:       {np.mean(sparsity):.4f} ({np.std(sparsity):.4f})")
 
 
 if __name__ == "__main__":

@@ -33,10 +33,10 @@ class MCTSNode:
 
     def __repr__(self):
         return str(f"MCTSNode(\n"
-                   f"   nodes={self.nodes}, \n"
-                   f"   num_visit={self.num_visit},\n "
-                   f"   total_reward={self.total_reward:.3f}, \n"
-                   f"   immediate_reward={self.immediate_reward:.3f}, \n"
+                   f"   nodes={self.nodes.tolist()}, \n"
+                   f"   num_visit={self.num_visit}, "
+                   f"   total_reward={self.total_reward:.3f}, "
+                   f"   immediate_reward={self.immediate_reward:.3f}, "
                    f"   children={len(self.children)}\n"
                    f")")
 
@@ -129,7 +129,7 @@ class SubgraphX(nn.Module):
         num_nodes = self.graph.num_nodes
         subgraph_nodes = subgraph_nodes.tolist()
 
-        # Obtain neighboring nodes of the subgraph g_i, P'.
+        # 1. Define Local Region (Subgraph + Neighbors)
         local_region = subgraph_nodes
         for _ in range(self.num_hops - 1):
             neighbors = set()
@@ -143,16 +143,25 @@ class SubgraphX(nn.Module):
 
         marginal_contributions = []
         device = self.feat.device
-        for _ in range(self.shapley_steps):
+
+        # --- DEBUG: Check if we are masking anything ---
+
+        for shapley_step in range(self.shapley_steps):
             permuted_space = np.random.permutation(coalition_space)
             split_idx = int(np.where(permuted_space == split_point)[0])
 
             selected_nodes = permuted_space[:split_idx]
 
+            # Exclude Mask:
+            # - Zeros out 'local_region' (which includes subgraph_nodes)
+            # - Adds back 'selected_nodes' (subset of neighbors)
+            # Result: Subgraph is excluded. Neighbors are partially included. Outside is included.
             exclude_mask = torch.ones(num_nodes, device=device)
             exclude_mask[local_region] = 0.0
             exclude_mask[selected_nodes] = 1.0
 
+            # Include Mask:
+            # - Same as exclude, but adds back 'subgraph_nodes'.
             include_mask = exclude_mask.clone()
             include_mask[subgraph_nodes] = 1.0
 
@@ -160,23 +169,35 @@ class SubgraphX(nn.Module):
             include_feat = self.feat * include_mask.unsqueeze(1)
 
             with torch.no_grad():
+                # Run Model with Excluded Features
                 exclude_graph = self.graph.clone()
                 exclude_graph.x = exclude_feat
-                exclude_probs = self.model(exclude_graph).softmax(dim=-1)
-                exclude_value = exclude_probs[:, self.target_class]
+                exclude_logits = self.model(exclude_graph)
+                exclude_value = exclude_logits[:, self.target_class].item()
 
+                # Run Model with Included Features
                 include_graph = self.graph.clone()
                 include_graph.x = include_feat
-                include_probs = self.model(include_graph).softmax(dim=-1)
-                include_value = include_probs[:, self.target_class]
+                include_logits = self.model(include_graph)
+                include_value = include_logits[:, self.target_class].item()
 
                 # exclude_probs = self.model(self.graph, exclude_feat, **self.kwargs).softmax(dim=-1)
                 # exclude_value = exclude_probs[:, self.target_class]
                 # include_probs = self.model(self.graph, include_feat, **self.kwargs).softmax(dim=-1)
                 # include_value = include_probs[:, self.target_class]
-            marginal_contributions.append(include_value - exclude_value)
 
-        return torch.cat(marginal_contributions).mean().item()
+            diff = include_value - exclude_value
+            marginal_contributions.append(diff)
+
+            # --- DEBUG: Print once per node to verify ---
+            # if shapley_step == 0:
+            #     print(
+            #         f"   [Step 0] Incl: {include_value:.7f} | Excl: {exclude_value:.7f} | Diff: {diff:.7f}")
+
+        mean_shapley_value = np.mean(marginal_contributions)
+        # print(
+        #     f"DEBUG: Shapley - Subgraph Size: {len(subgraph_nodes):3d}, Local Region: {len(local_region):3d}, Total: {num_nodes:4d}, value: {mean_shapley_value:.4f}")
+        return mean_shapley_value
 
     def get_mcts_children(self, mcts_node):
         """
@@ -204,22 +225,19 @@ class SubgraphX(nn.Module):
         nodes_to_remove = [node for node in range(self.graph.num_nodes) if node not in mcts_node.nodes]
         subg = remove_nodes(self.graph, nodes_to_remove, store_ids=True, device=self.device)
 
-        # We use self.graph.num_nodes as minlength to ensure both source and target
-        # degree vectors have the same size (covering all possible node IDs).
         if subg.edge_index.numel() == 0:
             node_degrees = torch.zeros(self.graph.num_nodes, device=self.device)
         else:
             num_nodes_total = self.graph.num_nodes
+            # Ensure bincount result is the same size by setting minlength
             node_degrees = (
                     subg.edge_index[0].bincount(minlength=num_nodes_total) +
                     subg.edge_index[1].bincount(minlength=num_nodes_total)
             )
 
-        # ------------------------------------------
-
         k = min(subg.num_nodes, self.num_child)
         chosen_nodes = torch.topk(node_degrees, k, largest=self.high2low).indices
-        # Até aqui, tudo igual.
+
         mcts_children_maps = dict()
 
         for node in chosen_nodes:
@@ -227,6 +245,11 @@ class SubgraphX(nn.Module):
             new_subg = remove_nodes(
                 subg, [node], store_ids=True
             )
+
+            new_subg_nx = to_networkx(new_subg.cpu(), node_attrs=["x"], to_undirected=False)
+            if len(new_subg_nx) == 0:
+                continue
+
             # nodes_to_include = mcts_node.nodes[mcts_node.nodes != node]
             # new_subg_edge_index, new_subg_edge_attr = subgraph(
             #     subset=nodes_to_include,
@@ -252,18 +275,14 @@ class SubgraphX(nn.Module):
             #     edge_attr=new_edge_attr
             # )
 
-            # Não apagou os nós.
-            new_subg_nx = to_networkx(new_subg.cpu(), node_attrs=["x"], to_undirected=False)
+            # Find largest connected component
+            largest_cc_nids = list(max(nx.weakly_connected_components(new_subg_nx), key=len))
 
-            largest_cc_nids = list(
-                max(nx.weakly_connected_components(new_subg_nx), key=len)
-            )
-
+            # Map indices back to original graph
+            # 1. Map from new_subg -> subg
             largest_cc_nids = new_subg.node_ids[largest_cc_nids].long()
+            # 2. Map from subg -> self.graph (Original)
             largest_cc_nids = subg.node_ids[largest_cc_nids].sort().values
-
-            # largest_cc_nids = max(nx.connected_components(new_subg_nx), key=len)
-            # largest_cc_nids = torch.tensor(list(largest_cc_nids), dtype=torch.long)
 
             if str(largest_cc_nids) not in self.mcts_node_maps:
                 child_mcts_node = MCTSNode(largest_cc_nids)
@@ -362,6 +381,10 @@ class SubgraphX(nn.Module):
         root = MCTSNode(torch.arange(graph.num_nodes))
         self.mcts_node_maps[str(root)] = root
 
+        # Calculate root reward explicitly to verify model works at all
+        root.immediate_reward = self.shapley(root.nodes)
+        print(f"DEBUG: Root Immediate Reward: {root.immediate_reward}")
+
         for i in range(self.num_rollouts):
             if self.log:
                 logging.info(
@@ -380,7 +403,9 @@ class SubgraphX(nn.Module):
                 best_leaf = mcts_node
                 best_immediate_reward = best_leaf.immediate_reward
 
-        # if self.log:
-        #     print(f"Best leaf node: {best_leaf}")
+        if best_leaf is None:
+            return {'nodes': torch.arange(graph.num_nodes)}
+
+        print(f"Best Explanation: {best_leaf.__dict__}")
 
         return best_leaf.__dict__

@@ -26,6 +26,20 @@ class GraphFidelityEvaluator:
         # Detect if model is DiffPool-like (returns tuple, accepts override_S)
         self.is_diffpool = self._check_is_diffpool()
 
+    def _get_probs(self, output: torch.Tensor) -> torch.Tensor:
+        """
+        Robustly converts model output to Probabilities [0, 1].
+        Works for both Logits (raw scores) and LogSoftmax.
+        """
+        # If output is already probabilities (unlikely for GNNs, but safety check)
+        if output.min() >= 0 and output.max() <= 1.0 and torch.abs(output.sum(dim=1) - 1.0).mean() < 1e-4:
+            return output
+
+        # Apply Softmax to get probabilities
+        # Softmax(Logits) -> Probs
+        # Softmax(LogSoftmax) -> Probs (Shift Invariance property)
+        return F.softmax(output, dim=1)
+
     def _check_is_diffpool(self) -> bool:
         """Introspects model forward signature to check for 'override_S' argument."""
         signature = inspect.signature(self.model.forward)
@@ -107,10 +121,15 @@ class GraphFidelityEvaluator:
             # For DiffPool, we need debug=True to extract S matrices for later freezing
             # For GCN, debug arg might cause error if not supported, so we check self.is_diffpool
 
-            log_probs, aux_data = self._run_forward(
+            logits, aux_data = self._run_forward(
                 x, adj, mask, edge_index, batch,
                 debug=self.is_diffpool  # Only use debug mode for DiffPool
             )
+
+            # Use Softmax instead of Exp
+            probs = self._get_probs(logits)
+            pred_class = torch.argmax(probs, dim=1).item()
+            pred_prob = probs[0, pred_class].item()
 
             # Handle S-matrix extraction for DiffPool debug output
             s_matrices = None
@@ -121,10 +140,6 @@ class GraphFidelityEvaluator:
                 # If 'aux_data' is just the last item tuple:
                 if isinstance(aux_data, tuple) and len(aux_data) >= 1:
                     s_matrices = aux_data  # Assign (s01, s12)
-
-            probs = torch.exp(log_probs)
-            pred_class = torch.argmax(probs, dim=1).item()
-            pred_prob = probs[0, pred_class].item()
 
         return pred_prob, s_matrices, pred_class
 
@@ -157,11 +172,17 @@ class GraphFidelityEvaluator:
             x_plus[explanation_nodes, :] = 0.0
 
         with torch.no_grad():
-            log_probs, _ = self._run_forward(
-                x_plus, adj, mask, edge_index, batch,
-                override_S=s_matrices  # Only used if is_diffpool=True
+            # log_probs, _ = self._run_forward(
+            #     x_plus, adj, mask, edge_index, batch,
+            #     override_S=s_matrices  # Only used if is_diffpool=True
+            # )
+            # prob_plus = torch.exp(log_probs)[0, target_class].item()
+            # --- FIX: Use Softmax ---
+            logits_plus, _ = self._run_forward(
+                x_plus, adj, mask, edge_index, batch, override_S=s_matrices
             )
-            prob_plus = torch.exp(log_probs)[0, target_class].item()
+            probs_plus = self._get_probs(logits_plus)
+            prob_plus = probs_plus[0, target_class].item()
 
         fid_plus = baseline_prob - prob_plus
 
@@ -181,11 +202,18 @@ class GraphFidelityEvaluator:
             x_minus[~keep_mask, :] = 0.0
 
         with torch.no_grad():
-            log_probs, _ = self._run_forward(
-                x_minus, adj, mask, edge_index, batch,
-                override_S=s_matrices
+            # log_probs, _ = self._run_forward(
+            #     x_minus, adj, mask, edge_index, batch,
+            #     override_S=s_matrices
+            # )
+            # prob_minus = torch.exp(log_probs)[0, target_class].item()
+
+            logits_minus, _ = self._run_forward(
+                x_minus, adj, mask, edge_index, batch, override_S=s_matrices
             )
-            prob_minus = torch.exp(log_probs)[0, target_class].item()
+            # --- FIX: Use Softmax ---
+            probs_minus = self._get_probs(logits_minus)
+            prob_minus = probs_minus[0, target_class].item()
 
         fid_minus = baseline_prob - prob_minus
 
@@ -222,9 +250,14 @@ class GraphFidelityEvaluator:
 
         handle = target_module.register_forward_pre_hook(hook_plus)
         try:
+            # with torch.no_grad():
+            #     out = self.model(x, adj, mask, override_S=s_matrices)
+            #     prob_plus = torch.exp(out[0])[0, target_class].item()
             with torch.no_grad():
                 out = self.model(x, adj, mask, override_S=s_matrices)
-                prob_plus = torch.exp(out[0])[0, target_class].item()
+                logits = out[0] if isinstance(out, tuple) else out
+                # --- Use Softmax ---
+                prob_plus = self._get_probs(logits)[0, target_class].item()
         finally:
             handle.remove()
 
@@ -242,9 +275,14 @@ class GraphFidelityEvaluator:
 
         handle = target_module.register_forward_pre_hook(hook_minus)
         try:
+            # with torch.no_grad():
+            #     out = self.model(x, adj, mask, override_S=s_matrices)
+            #     prob_minus = torch.exp(out[0])[0, target_class].item()
             with torch.no_grad():
                 out = self.model(x, adj, mask, override_S=s_matrices)
-                prob_minus = torch.exp(out[0])[0, target_class].item()
+                logits = out[0] if isinstance(out, tuple) else out
+                # --- Use Softmax ---
+                prob_minus = self._get_probs(logits)[0, target_class].item()
         finally:
             handle.remove()
 
@@ -291,6 +329,7 @@ def calculate_fidelity(model: torch.nn.Module,
         return evaluator.fidelity_level_L(
             x, adj, mask, explanation, level, s_matrices, target_class, baseline_prob
         )
+
 
 # TODO: Understand the whole code file and debug the function below.
 def jaccard_distance(list_a: List[int], list_b: List[int]) -> float:
@@ -398,7 +437,6 @@ def calculate_stability(model: torch.nn.Module,
             distances.append(dist)
             valid_samples += 1
 
-
     # If no perturbations resulted in the same class, stability is undefined (or we can return 0.0/1.0)
     # Returning None or 0.0 with a warning is safer.
     if valid_samples == 0:
@@ -407,8 +445,9 @@ def calculate_stability(model: torch.nn.Module,
 
     return sum(distances) / valid_samples
 
+
 def calculate_stability_adapted(model, explainer_func, x, adj, mask, target_class,
-                              edge_index=None, n_samples=5, noise_std=0.01, **kwargs):
+                                edge_index=None, n_samples=5, noise_std=0.01, **kwargs):
     """
     Calculates Stability allowing DiffPool to re-cluster (override_S=None).
     """
@@ -431,18 +470,66 @@ def calculate_stability_adapted(model, explainer_func, x, adj, mask, target_clas
         x_perturbed = x + noise
 
         with torch.no_grad():
-            log_probs_p, _ = evaluator._run_forward(
-                x_perturbed, adj, mask, override_S=None
+            # log_probs_p, _ = evaluator._run_forward(
+            #     x_perturbed, adj, mask, override_S=None
+            # )
+            # pred_p = torch.argmax(torch.exp(log_probs_p), dim=1).item()
+            logits_p, _ = evaluator._run_forward(
+                x_perturbed, adj, mask, edge_index, override_S=None
             )
-            pred_p = torch.argmax(torch.exp(log_probs_p), dim=1).item()
+            # Use Softmax here too!
+            probs_p = evaluator._get_probs(logits_p)
+            pred_class_p = torch.argmax(probs_p, dim=1).item()
 
-        if pred_p == target_class:
+        if pred_class_p == target_class:
             expl_p = explainer_func(
                 model, x_perturbed, adj, edge_index, target_class, **kwargs
             )
             distances.append(jaccard_distance(expl_orig, expl_p))
             valid_count += 1
 
-    if valid_count == 0: return 0.0
-    return sum(distances) / valid_count
+    return sum(distances) / valid_count if valid_count > 0 else 0.0
 
+
+def calculate_sparsity(explanation: Union[List[int], torch.Tensor], num_elements: int) -> float:
+    """
+        Calculates the Sparsity of an explanation.
+        Formula: 1 - (|Explanation| / |Total_Elements|)
+
+        Args:
+            explanation: A list of indices or a binary mask tensor identifying important nodes/features.
+            num_elements: The total number of nodes/features in the original graph.
+
+        Returns:
+            float: Sparsity score (0.0 to 1.0). Higher is usually better (more concise).
+        """
+
+    # 1. Determine size of explanation
+    if isinstance(explanation, list):
+        # Case: List of indices (e.g., from SubgraphX)
+        expl_size = len(set(explanation))
+    elif isinstance(explanation, torch.Tensor):
+        if explanation.dtype == torch.bool:
+            # Case: Boolean Mask
+            expl_size = explanation.sum().item()
+        elif explanation.numel() == num_elements:
+            # Case: Soft Mask (floats) - usually thresholded, but here we assume binary input
+            # or we treat it as "amount of information"
+            expl_size = (explanation > 0).sum().item()
+        else:
+            # Case: Tensor of indices
+            expl_size = explanation.numel()
+    else:
+        raise ValueError(f"Unsupported explanation type: {type(explanation)}")
+
+    # 2. Safety Check
+    if num_elements == 0:
+        return 0.0
+
+    # 3. Calculate Ratio
+    ratio = expl_size / num_elements
+
+    # Clamp ratio to [0, 1] to handle edge cases where |M| > N (shouldn't happen but good for safety)
+    ratio = max(0.0, min(1.0, ratio))
+
+    return 1.0 - ratio
