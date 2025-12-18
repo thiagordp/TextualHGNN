@@ -166,7 +166,7 @@ def run_subgraphx(model, x, adj, edge_index, target_class, **kwargs):
     return []
 
 
-def run_graphsvx(model, x, adj, edge_index, target_class, **kwargs):
+def run_graphsvx(model, x, adj, edge_index, target_class, mask=None, **kwargs):
     """
     Runs GraphSVX.
     """
@@ -195,10 +195,12 @@ def run_graphsvx(model, x, adj, edge_index, target_class, **kwargs):
         x=x,
         adj=adj,
         target_class=target_class,
-        top_k=top_k
+        top_k=top_k,
+        node_mask=mask
     )
 
     return explanation_nodes
+
 
 # ==========================================
 # 5. Stability Metric (Local Fix)
@@ -305,7 +307,7 @@ def main():
         # }
         #
         # explanation = run_subgraphx(model, x, adj, edge_index, pred, **sx_args)
-        # logging.info(f"Explanation Nodes: {explanation}")
+        # logging.info(f"Explanation SubgraphX: {explanation}")
         logging.info("Running GraphSVX...")
 
         # Settings
@@ -323,7 +325,7 @@ def main():
             **svx_args
         )
 
-        logging.info(f"Explanation: {explanation}")
+        logging.info(f"Explanation GraphSVX: {explanation}")
 
         # 2. Fidelity
         fid_plus, fid_minus = calculate_fidelity(

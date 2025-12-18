@@ -143,7 +143,6 @@ class DiffPool(GNN):
         adj_l2 = adj
 
         # --- [CHANGED] Final Readout (Classify THEN Pool) ---
-
         # Apply classifier to *each cluster embedding*
         # x shape: [B, N_L2, C_hidden]
         cluster_logits = self.lin(x)

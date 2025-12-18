@@ -118,7 +118,7 @@ class GraphSVX(nn.Module):
 
         return np.vstack(predictions)  # [num_samples, num_classes]
 
-    def explain(self, x, adj, target_class, top_k=5):
+    def explain(self, x, adj, target_class, top_k=5, node_mask=None):
         """
         Main explanation loop.
         Args:
@@ -126,7 +126,7 @@ class GraphSVX(nn.Module):
             adj: adjacency matrix [1, N, N]
             target_class: True Class
             top_k: Number of top k features/nodes
-
+            node_mask: Boolean tensor [1, N] indicating valid (non-padding) nodes.
         Returns:
             Top k indices.
         """
@@ -137,8 +137,9 @@ class GraphSVX(nn.Module):
         z_, weights = self.mask_generation(num_nodes, self.num_samples)
 
         # 2. Get Model Outputs (Logits)
-        # Returns [samples, classes]
-        y_pred = self.get_predictions(x, adj, None, z_)
+        # Note: We pass the original node_mask to the model so it knows
+        # which nodes are valid for pooling, even if we perturbed them.
+        y_pred = self.get_predictions(x, adj, node_mask, z_)
 
         # 3. Select Target Class Logits
         y_target = y_pred[:, target_class]
@@ -161,6 +162,19 @@ class GraphSVX(nn.Module):
             reg = LinearRegression()
             reg.fit(Z_np, y_target, sample_weight=W_np)
             shapley_values = reg.coef_
+
+        # If no mask provided, calculate it from features (Assuming Padding=0)
+        if node_mask is None:
+            # Check for non-zero features: [1, N, F] -> [1, N]
+            node_mask = x.abs().sum(dim=-1) > 1e-5
+
+        # Apply Mask to Shapley Values
+        # Ensure mask is flat boolean array on CPU
+        valid_indices = node_mask.cpu().numpy().flatten().astype(bool)
+
+        # Set invalid nodes to Negative Infinity so they are sorted last
+        # We use a very large negative number to ensure they lose to real negative contributions
+        shapley_values[~valid_indices] = -1e9
 
         # 5. Extract Top-K Nodes
         # Sort by contribution (Highest coefficient = Most important)
